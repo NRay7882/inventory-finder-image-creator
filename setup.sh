@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # setup.sh - One-time setup for inventory-finder-image-creator (Mac/Linux)
 #
-# Installs Raspberry Pi Imager and downloads the SSH keys needed to create
+# Installs Raspberry Pi Imager and downloads the admin SSH key needed to create
 # station images. Run this once before using create-image.sh.
 #
 # Re-run with --refresh at any time to pick up rotated keys.
@@ -11,12 +11,11 @@
 set -euo pipefail
 
 # ── Key distribution ──────────────────────────────────────────────────────────
-# GitHub username and secret gist ID containing the fleet keys.
-# The gist must have two files:
-#   inventory_deploy    - fleet deploy private key
+# GitHub username and secret gist ID containing the admin SSH key.
+# The gist must have one file:
 #   id_ed25519.pub      - admin SSH public key
 GIST_USER="NRay7882"
-GIST_ID=""   # fill in your gist ID
+GIST_ID="c0ab6487169a1e76bdba0ef65bb8547c"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -114,38 +113,12 @@ else
     fi
 fi
 
-# ── Step 2: Fleet deploy key ──────────────────────────────────────────────────
+# ── Step 2: Admin SSH key ─────────────────────────────────────────────────────
 
 printf '\n'
 SSH_DIR="$HOME/.ssh"
-DEPLOY_KEY="$SSH_DIR/inventory_deploy"
 ADMIN_KEY="$SSH_DIR/id_ed25519.pub"
 
-step "Checking for fleet deploy key..."
-
-if [[ -f "$DEPLOY_KEY" ]] && ! $REFRESH; then
-    ok "Fleet deploy key present"
-elif $FETCH_ENABLED; then
-    step "Fetching fleet deploy key..."
-    content=$(get_gist_file "inventory_deploy")
-    if [[ -n "$content" && "$content" == *"BEGIN"*"KEY"* ]]; then
-        mkdir -p "$SSH_DIR"
-        printf '%s\n' "$content" > "$DEPLOY_KEY"
-        chmod 600 "$DEPLOY_KEY"
-        ok "Fleet deploy key saved to $DEPLOY_KEY"
-    else
-        warn "Could not fetch fleet deploy key. Contact your system administrator."
-        ALL_OK=false
-    fi
-else
-    warn "Fleet deploy key not found at $DEPLOY_KEY"
-    [[ -z "$GIST_ID" ]] && printf "  ${GRAY}Contact your system administrator for setup assistance.${NC}\n"
-    ALL_OK=false
-fi
-
-# ── Step 3: Admin SSH key ─────────────────────────────────────────────────────
-
-printf '\n'
 step "Checking for admin SSH key..."
 
 if [[ -f "$ADMIN_KEY" ]] && ! $REFRESH; then

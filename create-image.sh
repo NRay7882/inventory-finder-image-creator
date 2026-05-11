@@ -6,7 +6,7 @@
 #   Full mode (--image-path provided):
 #     1. Flashes the OS image via rpi-imager CLI or dd.
 #     2. Writes firstrun.sh (hostname, user, SSH, WiFi, locale).
-#     3. Writes station.conf (deploy key, registration secret, etc.).
+#     3. Writes station.conf (GitHub PAT, registration secret, etc.).
 #
 #   Provision-only mode (--image-path omitted):
 #     Writes station.conf to an already-mounted boot partition.
@@ -74,7 +74,7 @@ LOCALE="en_US.UTF-8"
 
 SERVER_URL=""
 REGISTRATION_SECRET=""
-DEPLOY_KEY_PATH="$HOME/.ssh/inventory_deploy"
+GITHUB_PAT=""
 ADMIN_SSH_KEY_PATH="$HOME/.ssh/id_ed25519.pub"
 
 STATIC_IP=""
@@ -86,7 +86,7 @@ STATIC_DNS="8.8.8.8,1.1.1.1"
 
 usage() {
     cat <<'EOF'
-Usage: ./provision-image.sh [options]
+Usage: ./create-image.sh [options]
 
   --image-path PATH          .img or .img.xz file (triggers full mode)
   --disk DEVICE              SD card device (e.g. /dev/disk4 or /dev/sdb)
@@ -106,7 +106,7 @@ Usage: ./provision-image.sh [options]
 
   --server-url URL           Server URL (e.g. http://192.168.2.100:8000)
   --registration-secret S    Registration secret from server .env
-  --deploy-key PATH          Fleet deploy private key (default: ~/.ssh/inventory_deploy)
+  --github-pat TOKEN         GitHub PAT with read-only Contents access to inventory-finder
   --admin-ssh-key PATH       Admin SSH public key (default: ~/.ssh/id_ed25519.pub)
                              Pass "" to skip
 
@@ -119,10 +119,10 @@ Usage: ./provision-image.sh [options]
 
 Examples:
   Full mode (flash + configure):
-    ./provision-image.sh --image-path ~/Downloads/raspios-trixie-arm64-lite.img.xz
+    ./create-image.sh --image-path ~/Downloads/raspios-trixie-arm64-lite.img.xz
 
   Provision-only (already flashed card):
-    ./provision-image.sh
+    ./create-image.sh
 EOF
     exit 0
 }
@@ -144,7 +144,7 @@ while [[ $# -gt 0 ]]; do
         --wifi-hidden)         WIFI_HIDDEN="true";        shift   ;;
         --server-url)          SERVER_URL="$2";           shift 2 ;;
         --registration-secret) REGISTRATION_SECRET="$2"; shift 2 ;;
-        --deploy-key)          DEPLOY_KEY_PATH="$2";      shift 2 ;;
+        --github-pat)          GITHUB_PAT="$2";           shift 2 ;;
         --admin-ssh-key)       ADMIN_SSH_KEY_PATH="$2";   shift 2 ;;
         --static-ip)           STATIC_IP="$2";            shift 2 ;;
         --static-gateway)      STATIC_GATEWAY="$2";       shift 2 ;;
@@ -565,7 +565,7 @@ systemctl enable getty@tty1.service 2>/dev/null || true
 
 # Install first_boot.sh and the inventory-setup service.
 # first_boot.sh (copied from the boot partition) handles: WiFi via NetworkManager,
-# deploy key installation, repo clone, full provisioning, and server registration.
+# git credential configuration, repo clone, full provisioning, and server registration.
 # The flag file prevents re-runs; first_boot.sh removes it on success.
 mkdir -p /opt/inventory /etc/inventory
 cp /boot/firmware/first_boot.sh /opt/inventory/first_boot.sh
@@ -681,19 +681,12 @@ if [[ -z "$REGISTRATION_SECRET" ]]; then
 fi
 [[ -n "$REGISTRATION_SECRET" ]] || fail "REGISTRATION_SECRET is required."
 
-if [[ ! -f "$DEPLOY_KEY_PATH" ]]; then
-    DEPLOY_KEY_PATH=$(prompt_line "Path to fleet deploy private key")
+if [[ -z "$GITHUB_PAT" ]]; then
+    GITHUB_PAT=$(read_secure "GitHub PAT (inventory-fleet-deploy, read-only Contents)")
 fi
-[[ -f "$DEPLOY_KEY_PATH" ]] || fail "Deploy key not found: $DEPLOY_KEY_PATH"
-key_header=$(head -c 40 "$DEPLOY_KEY_PATH")
-[[ "$key_header" == *"BEGIN"*"KEY"* ]] || fail "Not an SSH private key: $DEPLOY_KEY_PATH"
-
-if [[ "$OS_TYPE" == "Darwin" ]]; then
-    DEPLOY_KEY_B64=$(base64 -i "$DEPLOY_KEY_PATH")
-else
-    DEPLOY_KEY_B64=$(base64 -w 0 "$DEPLOY_KEY_PATH")
-fi
-ok "Deploy key: $DEPLOY_KEY_PATH"
+[[ -n "$GITHUB_PAT" ]] || fail "GITHUB_PAT is required."
+[[ "$GITHUB_PAT" == ghp_* ]] || warn "PAT does not look like a fine-grained token (expected ghp_ prefix)"
+ok "GitHub PAT: provided"
 
 ADMIN_SSH_KEY=""
 if [[ -n "$ADMIN_SSH_KEY_PATH" && -f "$ADMIN_SSH_KEY_PATH" ]]; then
@@ -713,7 +706,7 @@ if [[ -n "$WIFI_SSID" && "$WIFI_SECURITY" != "open" && -z "$WIFI_PASSWORD" ]]; t
 fi
 
 out_file="$BOOT_MOUNT/station.conf"
-step "Writing provision.conf to $out_file..."
+step "Writing station.conf to $out_file..."
 
 [[ -n "$ADMIN_SSH_KEY" ]] && admin_line="ADMIN_SSH_KEY='$ADMIN_SSH_KEY'" || admin_line="ADMIN_SSH_KEY="
 [[ -n "$WIFI_PASSWORD" ]] && wifi_pass_line="WIFI_PASSWORD='$WIFI_PASSWORD'" || wifi_pass_line="WIFI_PASSWORD="
@@ -727,7 +720,7 @@ step "Writing provision.conf to $out_file..."
     printf '# REQUIRED\n'
     printf 'REGISTRATION_SECRET=%s\n' "$REGISTRATION_SECRET"
     printf 'SERVER_URL=%s\n' "$SERVER_URL"
-    printf 'DEPLOY_KEY_B64=%s\n' "$DEPLOY_KEY_B64"
+    printf 'GITHUB_PAT=%s\n' "$GITHUB_PAT"
     printf '\n'
     printf '# OPTIONAL - Admin SSH public key (enables passwordless SSH, disables password auth)\n'
     printf '%s\n' "$admin_line"

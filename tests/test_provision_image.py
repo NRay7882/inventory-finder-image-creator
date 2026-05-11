@@ -23,7 +23,7 @@ class TestProvisionConfExample:
 
     def test_required_fields_present(self):
         content = STATION_CONF_EXAMPLE.read_text()
-        for field in ("REGISTRATION_SECRET", "SERVER_URL", "DEPLOY_KEY_B64"):
+        for field in ("REGISTRATION_SECRET", "SERVER_URL", "GITHUB_PAT"):
             assert field in content, f"Required field {field} missing from station.conf.example"
 
     def test_admin_ssh_key_field_present(self):
@@ -42,7 +42,7 @@ class TestProvisionConfExample:
     def test_required_fields_are_blank(self):
         """Template must ship with empty values - no accidental secrets committed."""
         content = STATION_CONF_EXAMPLE.read_text()
-        for field in ("REGISTRATION_SECRET", "DEPLOY_KEY_B64"):
+        for field in ("REGISTRATION_SECRET", "GITHUB_PAT"):
             assert f"{field}=\n" in content or f"{field}=" in content, (
                 f"{field} in station.conf.example must have a blank value"
             )
@@ -104,7 +104,7 @@ class TestProvisionImageShHelp:
             ["bash", str(CREATE_SH), "--help"],
             capture_output=True, text=True,
         )
-        for option in ("--image-path", "--boot-mount", "--server-url", "--deploy-key", "--wifi-ssid"):
+        for option in ("--image-path", "--boot-mount", "--server-url", "--github-pat", "--wifi-ssid"):
             assert option in result.stdout, f"--help output missing option: {option}"
 
     def test_unknown_option_fails(self):
@@ -140,21 +140,12 @@ class TestProvisionImageShPath:
 class TestProvisionOnly:
     """create-image.sh provision-only mode writes a valid station.conf."""
 
-    @staticmethod
-    def _fake_deploy_key(tmp_path: Path) -> Path:
-        key_file = tmp_path / "fake_deploy_key"
-        key_file.write_text(
-            "-----BEGIN OPENSSH PRIVATE KEY-----\nZmFrZWtleWZha2VrZXlmYWtla2V5\n-----END OPENSSH PRIVATE KEY-----\n"
-        )
-        return key_file
-
     def test_writes_provision_conf(self, tmp_path):
         boot = tmp_path / "bootfs"
         boot.mkdir()
         (boot / "cmdline.txt").write_text(
             "console=serial0,115200 root=/dev/mmcblk0p2 rootfstype=ext4\n"
         )
-        key = self._fake_deploy_key(tmp_path)
 
         result = subprocess.run(
             [
@@ -162,7 +153,7 @@ class TestProvisionOnly:
                 "--boot-mount", str(boot),
                 "--server-url", "http://192.168.1.100:8000",
                 "--registration-secret", "test-secret-abc",
-                "--deploy-key", str(key),
+                "--github-pat", "ghp_testtoken123",
                 "--admin-ssh-key", "",
             ],
             capture_output=True, text=True, timeout=30,
@@ -176,7 +167,6 @@ class TestProvisionOnly:
         boot = tmp_path / "bootfs"
         boot.mkdir()
         (boot / "cmdline.txt").write_text("console=serial0,115200 root=/dev/mmcblk0p2\n")
-        key = self._fake_deploy_key(tmp_path)
 
         subprocess.run(
             [
@@ -184,7 +174,7 @@ class TestProvisionOnly:
                 "--boot-mount", str(boot),
                 "--server-url", "http://192.168.1.100:8000",
                 "--registration-secret", "my-test-secret",
-                "--deploy-key", str(key),
+                "--github-pat", "ghp_testtoken123",
                 "--admin-ssh-key", "",
             ],
             capture_output=True, text=True, timeout=30,
@@ -192,23 +182,22 @@ class TestProvisionOnly:
         conf_text = (boot / "station.conf").read_text()
         assert "REGISTRATION_SECRET=my-test-secret" in conf_text
         assert "SERVER_URL=http://192.168.1.100:8000" in conf_text
-        assert "DEPLOY_KEY_B64=" in conf_text
+        assert "GITHUB_PAT=" in conf_text
 
     def test_nonexistent_boot_mount_fails(self, tmp_path):
-        key = self._fake_deploy_key(tmp_path)
         result = subprocess.run(
             [
                 "bash", str(CREATE_SH),
                 "--boot-mount", str(tmp_path / "nonexistent"),
                 "--server-url", "http://192.168.1.100:8000",
                 "--registration-secret", "test",
-                "--deploy-key", str(key),
+                "--github-pat", "ghp_testtoken123",
             ],
             capture_output=True, text=True, timeout=10,
         )
         assert result.returncode != 0
 
-    def test_missing_deploy_key_fails(self, tmp_path):
+    def test_missing_github_pat_fails(self, tmp_path):
         boot = tmp_path / "bootfs"
         boot.mkdir()
         (boot / "cmdline.txt").write_text("root=/dev/mmcblk0p2\n")
@@ -218,7 +207,7 @@ class TestProvisionOnly:
                 "--boot-mount", str(boot),
                 "--server-url", "http://192.168.1.100:8000",
                 "--registration-secret", "test",
-                "--deploy-key", str(tmp_path / "no_such_key"),
+                "--github-pat", "",
             ],
             capture_output=True, text=True, timeout=10,
         )

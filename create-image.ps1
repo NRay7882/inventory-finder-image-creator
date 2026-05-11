@@ -10,10 +10,10 @@
     Full mode  (-ImagePath provided):
       1. Flashes the OS image via Raspberry Pi Imager CLI.
       2. Writes firstrun.sh (hostname, user/password, SSH, WiFi, locale).
-      3. Writes provision.conf (deploy key, registration secret, etc.).
+      3. Writes station.conf (GitHub PAT, registration secret, etc.).
 
     Provision-only mode  (-ImagePath omitted):
-      Writes provision.conf to an already-mounted boot partition.
+      Writes station.conf to an already-mounted boot partition.
       Use when the card was flashed and customised separately.
 
     Secrets are prompted securely unless supplied as arguments.
@@ -71,9 +71,9 @@
 .PARAMETER RegistrationSecret
     From server .env REGISTRATION_SECRET. Read automatically when present.
 
-.PARAMETER DeployKeyPath
-    Fleet deploy private key file. Base64-encoded automatically.
-    Default: $env:USERPROFILE\.ssh\inventory_deploy
+.PARAMETER GithubPat
+    GitHub fine-grained PAT with read-only Contents access to the inventory-finder
+    repo. Used by the Pi to clone and pull updates. Prompted securely if not supplied.
 
 .PARAMETER AdminSshKeyPath
     Admin SSH public key file. Enables passwordless SSH on the Pi.
@@ -84,12 +84,12 @@
     Optional static IP. Leave blank for DHCP.
 
 .EXAMPLE
-    .\provision-image.ps1 -ImagePath "C:\images\raspios-trixie-arm64-lite.img.xz"
+    .\create-image.ps1 -ImagePath "C:\images\raspios-trixie-arm64-lite.img.xz"
     Full automation. Prompts for passwords; reads secret from server\.env.
 
 .EXAMPLE
-    .\provision-image.ps1
-    Provision-only. Writes provision.conf to the already-mounted boot partition.
+    .\create-image.ps1
+    Provision-only. Writes station.conf to the already-mounted boot partition.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -104,7 +104,7 @@ param(
     [string]$Timezone        = "America/New_York",
     [string]$KeyboardLayout  = "us",
 
-    # WiFi (used in both firstrun.sh and provision.conf)
+    # WiFi (used in both firstrun.sh and station.conf)
     [string]$WifiSsid,
     [string]$WifiPassword,
     [string]$WifiCountry   = "US",
@@ -117,7 +117,7 @@ param(
     # station.conf
     [string]$ServerUrl,
     [string]$RegistrationSecret,
-    [string]$DeployKeyPath   = "$env:USERPROFILE\.ssh\inventory_deploy",
+    [string]$GithubPat,
     [string]$AdminSshKeyPath = "$env:USERPROFILE\.ssh\id_ed25519.pub",
     [string]$StaticIp,
     [string]$StaticGateway,
@@ -526,7 +526,7 @@ systemctl enable getty@tty1.service 2>/dev/null || true
 
 # Install first_boot.sh and the inventory-setup service.
 # first_boot.sh (copied from the boot partition) handles: WiFi via NetworkManager,
-# deploy key installation, repo clone, full provisioning, and server registration.
+# git credential configuration, repo clone, full provisioning, and server registration.
 # The flag file prevents re-runs; first_boot.sh removes it on success.
 mkdir -p /opt/inventory /etc/inventory
 cp /boot/firmware/first_boot.sh /opt/inventory/first_boot.sh
@@ -655,16 +655,13 @@ if (-not $RegistrationSecret) {
 }
 if (-not $RegistrationSecret) { Fail "REGISTRATION_SECRET is required." }
 
-# Deploy key
-if (-not (Test-Path $DeployKeyPath -ErrorAction SilentlyContinue)) {
-    $DeployKeyPath = (Read-Host "Path to fleet deploy private key").Trim('"').Trim()
+# GitHub PAT
+if (-not $GithubPat) {
+    $GithubPat = Read-Secure "GitHub PAT (inventory-fleet-deploy, read-only Contents)"
 }
-if (-not (Test-Path $DeployKeyPath)) { Fail "Deploy key not found: $DeployKeyPath" }
-$keyBytes  = [IO.File]::ReadAllBytes($DeployKeyPath)
-$keyHeader = [Text.Encoding]::UTF8.GetString($keyBytes, 0, [Math]::Min(40, $keyBytes.Length))
-if ($keyHeader -notmatch "BEGIN.*KEY") { Fail "Not an SSH private key: $DeployKeyPath" }
-$deployKeyB64 = [Convert]::ToBase64String($keyBytes)
-Ok "Deploy key: $DeployKeyPath ($($keyBytes.Length) bytes)"
+if (-not $GithubPat) { Fail "GITHUB_PAT is required." }
+if ($GithubPat -notmatch "^ghp_") { Warn "PAT does not look like a fine-grained token (expected ghp_ prefix)" }
+Ok "GitHub PAT: provided"
 
 # Admin SSH public key
 $adminSshKey = ""
@@ -701,7 +698,7 @@ $conf = @"
 # REQUIRED
 REGISTRATION_SECRET=$RegistrationSecret
 SERVER_URL=$ServerUrl
-DEPLOY_KEY_B64=$deployKeyB64
+GITHUB_PAT=$GithubPat
 
 # OPTIONAL - Admin SSH public key (enables passwordless SSH, disables password auth)
 $adminLine

@@ -3,8 +3,8 @@
 # first_boot.sh - First-Boot Setup for Inventory Client Stations
 #
 # Runs exactly once on a freshly flashed Pi via inventory-setup.service.
-# Reads secrets from /boot/firmware/station.conf, installs the fleet
-# deploy key, clones the repo, runs full provisioning, and registers
+# Reads secrets from /boot/firmware/station.conf, configures GitHub
+# credentials, clones the repo, runs full provisioning, and registers
 # with the server. On success, zeroes sensitive fields and removes the
 # first-boot flag so the service never runs again.
 #
@@ -48,9 +48,7 @@ fi
 LOG_FILE="${PI_HOME}/first-boot.log"
 REPO_DIR="${PI_HOME}/inventory-finder"
 CLIENT_DIR="${REPO_DIR}/client"
-GITHUB_REPO="git@github.com:NRay7882/inventory-finder.git"
-DEPLOY_KEY_FILE="${PI_HOME}/.ssh/inventory_deploy"
-SSH_CONFIG="${PI_HOME}/.ssh/config"
+GITHUB_REPO="https://github.com/NRay7882/inventory-finder.git"
 SERVICE_NAME="inventory-setup"
 
 # Colors
@@ -131,13 +129,13 @@ set +a
 
 REGISTRATION_SECRET="${REGISTRATION_SECRET:-}"
 SERVER_URL="${SERVER_URL:-}"
-DEPLOY_KEY_B64="${DEPLOY_KEY_B64:-}"
+GITHUB_PAT="${GITHUB_PAT:-}"
 ADMIN_SSH_KEY="${ADMIN_SSH_KEY:-}"
 
 missing=()
 [ -z "$REGISTRATION_SECRET" ] && missing+=("REGISTRATION_SECRET")
 [ -z "$SERVER_URL" ]          && missing+=("SERVER_URL")
-[ -z "$DEPLOY_KEY_B64" ]      && missing+=("DEPLOY_KEY_B64")
+[ -z "$GITHUB_PAT" ]          && missing+=("GITHUB_PAT")
 
 if [ ${#missing[@]} -gt 0 ]; then
     fail "Missing required fields in station.conf:"
@@ -147,7 +145,7 @@ if [ ${#missing[@]} -gt 0 ]; then
     abort "Fill in all required fields and reboot."
 fi
 
-ok "Required fields present: REGISTRATION_SECRET, SERVER_URL, DEPLOY_KEY_B64"
+ok "Required fields present: REGISTRATION_SECRET, SERVER_URL, GITHUB_PAT"
 info "Server: ${SERVER_URL}"
 if [ -n "$ADMIN_SSH_KEY" ]; then
     info "Admin SSH key provided - will configure authorized_keys"
@@ -300,36 +298,24 @@ else
 fi
 
 # =====================================================================
-# STEP 3: Install deploy key
+# STEP 3: Configure GitHub credentials
 # =====================================================================
 
 log ""
-log -e "${CYAN}[3/7] Installing fleet deploy key${NC}"
+log -e "${CYAN}[3/7] Configuring GitHub credentials${NC}"
 
 mkdir -p "${PI_HOME}/.ssh"
 chmod 700 "${PI_HOME}/.ssh"
 
-# Decode and install the private key
-if echo "$DEPLOY_KEY_B64" | base64 -d > "$DEPLOY_KEY_FILE" 2>/dev/null; then
-    chmod 600 "$DEPLOY_KEY_FILE"
+# Write ~/.git-credentials so git HTTPS auth works without prompting.
+# git credential store reads the first matching line: https://<token>@github.com
+CRED_FILE="${PI_HOME}/.git-credentials"
+printf 'https://%s@github.com\n' "$GITHUB_PAT" > "$CRED_FILE"
+chmod 600 "$CRED_FILE"
+fix_owner "$CRED_FILE"
 
-    # Validate it looks like a real key
-    if head -1 "$DEPLOY_KEY_FILE" | grep -q "BEGIN.*KEY"; then
-        ok "Deploy key installed at ${DEPLOY_KEY_FILE}"
-    else
-        rm -f "$DEPLOY_KEY_FILE"
-        abort "DEPLOY_KEY_B64 decoded but does not look like a valid SSH key."
-    fi
-else
-    abort "Failed to base64-decode DEPLOY_KEY_B64. Check encoding."
-fi
-
-# Derive public key (used to verify the key is valid)
-if ssh-keygen -y -f "$DEPLOY_KEY_FILE" > "${DEPLOY_KEY_FILE}.pub" 2>/dev/null; then
-    ok "Public key derived"
-else
-    warn "Could not derive public key - git clone may still work"
-fi
+git config --global credential.helper store
+ok "GitHub credentials configured"
 
 # Install admin SSH key for passwordless login
 if [ -n "$ADMIN_SSH_KEY" ]; then
@@ -342,31 +328,6 @@ if [ -n "$ADMIN_SSH_KEY" ]; then
         ok "Admin SSH key already in authorized_keys"
     fi
 fi
-
-# Configure SSH to use this key for GitHub
-if [ -f "$SSH_CONFIG" ] && grep -q "inventory_deploy" "$SSH_CONFIG" 2>/dev/null; then
-    ok "SSH config already has deploy key entry"
-else
-    info "Configuring SSH for GitHub..."
-    cat >> "$SSH_CONFIG" <<SSHCFG
-
-Host github.com
-    IdentityFile ${DEPLOY_KEY_FILE}
-    IdentitiesOnly yes
-SSHCFG
-    chmod 600 "$SSH_CONFIG"
-    ok "SSH config updated"
-fi
-
-# Add GitHub to known_hosts (avoid interactive prompt)
-if ! grep -q "github.com" "${PI_HOME}/.ssh/known_hosts" 2>/dev/null; then
-    ssh-keyscan -t ed25519 github.com >> "${PI_HOME}/.ssh/known_hosts" 2>/dev/null
-    ok "GitHub added to known_hosts"
-fi
-
-# Ensure git and ssh always use the deploy key regardless of which user
-# the process runs as (sudo bash runs as root but key lives under PI_HOME)
-export GIT_SSH_COMMAND="ssh -i ${DEPLOY_KEY_FILE} -o UserKnownHostsFile=${PI_HOME}/.ssh/known_hosts -o IdentitiesOnly=yes"
 
 fix_owner "${PI_HOME}/.ssh"
 
@@ -403,20 +364,10 @@ if [ -d "${REPO_DIR}/.git" ]; then
     cd "$PI_HOME" || exit 1
 else
     info "Cloning repository..."
-    # Verify SSH auth works before cloning
-    if ssh -i "$DEPLOY_KEY_FILE" \
-           -o "UserKnownHostsFile=${PI_HOME}/.ssh/known_hosts" \
-           -o IdentitiesOnly=yes \
-           -T git@github.com 2>&1 | grep -qi "successfully authenticated"; then
-        ok "GitHub SSH authentication confirmed"
-    else
-        warn "GitHub SSH test did not confirm - attempting clone anyway"
-    fi
-
     if git clone "$GITHUB_REPO" "$REPO_DIR" 2>&1 | tail -5 | tee -a "$LOG_FILE"; then
         ok "Repository cloned"
     else
-        abort "Repository clone failed. Is the deploy key added to GitHub?"
+        abort "Repository clone failed. Is the GitHub PAT valid and does it have Contents read access?"
     fi
 
     # Set up sparse checkout (client-only files)
@@ -506,7 +457,7 @@ log -e "${CYAN}[7/7] Cleanup${NC}"
 # Zero sensitive fields in station.conf (leave SERVER_URL as a record)
 info "Zeroing sensitive fields in station.conf..."
 sudo sed -i 's/^REGISTRATION_SECRET=.*/REGISTRATION_SECRET=/' "$STATION_CONF"
-sudo sed -i 's/^DEPLOY_KEY_B64=.*/DEPLOY_KEY_B64=/' "$STATION_CONF"
+sudo sed -i 's/^GITHUB_PAT=.*/GITHUB_PAT=/' "$STATION_CONF"
 sudo sed -i 's/^WIFI_PASSWORD=.*/WIFI_PASSWORD=/' "$STATION_CONF"
 sudo sed -i 's/^STATIC_DNS=.*/STATIC_DNS=/' "$STATION_CONF"
 ok "Sensitive fields zeroed in station.conf"

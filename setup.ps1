@@ -3,11 +3,11 @@
     One-time setup for inventory-finder-image-creator.
 
 .DESCRIPTION
-    Installs Raspberry Pi Imager and downloads the SSH keys needed to create
+    Installs Raspberry Pi Imager and downloads the admin SSH key needed to create
     station images. Run this once before using create-image.ps1.
 
-    Keys are fetched automatically and saved to %USERPROFILE%\.ssh\.
-    Re-run with -Refresh at any time to pick up rotated keys.
+    The admin SSH key is fetched automatically and saved to %USERPROFILE%\.ssh\.
+    Re-run with -Refresh at any time to pick up a rotated key.
 
 .PARAMETER Refresh
     Re-download keys even if they are already present locally.
@@ -29,15 +29,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # ── Key distribution ──────────────────────────────────────────────────────────
-# GitHub username and secret gist ID containing the fleet keys.
-# The gist must have two files:
-#   inventory_deploy    - fleet deploy private key
+# GitHub username and secret gist ID containing the admin SSH key.
+# The gist must have one file:
 #   id_ed25519.pub      - admin SSH public key
 #
 # Raw URL format (no commit hash = always returns latest version):
 #   https://gist.githubusercontent.com/{GistUser}/{GistId}/raw/{filename}
 $GistUser = "NRay7882"
-$GistId   = ""   # fill in your gist ID
+$GistId   = "c0ab6487169a1e76bdba0ef65bb8547c"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -112,41 +111,12 @@ if ($imager) {
     }
 }
 
-# ── Step 2: Fleet deploy key ──────────────────────────────────────────────────
+# ── Step 2: Admin SSH key ─────────────────────────────────────────────────────
 
 Write-Host ""
-$sshDir    = "$env:USERPROFILE\.ssh"
-$deployKey = "$sshDir\inventory_deploy"
-$adminKey  = "$sshDir\id_ed25519.pub"
+$sshDir   = "$env:USERPROFILE\.ssh"
+$adminKey = "$sshDir\id_ed25519.pub"
 
-Step "Checking for fleet deploy key..."
-
-if ((Test-Path $deployKey) -and -not $Refresh) {
-    Ok "Fleet deploy key present"
-} elseif ($fetchEnabled) {
-    Step "Fetching fleet deploy key..."
-    $content = Get-GistFile "inventory_deploy"
-    if ($content -and ($content -match "BEGIN.*KEY")) {
-        New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
-        [IO.File]::WriteAllText($deployKey, $content.Replace("`r`n", "`n"), [Text.UTF8Encoding]::new($false))
-        icacls $deployKey /inheritance:r /grant:r "${env:USERNAME}:(R,W)" 2>$null | Out-Null
-        Ok "Fleet deploy key saved to $deployKey"
-    } else {
-        Warn "Could not fetch fleet deploy key. Contact your system administrator."
-        $allOk = $false
-    }
-} else {
-    Warn "Fleet deploy key not found at $deployKey"
-    if (-not $fetchEnabled) {
-        Write-Host "  GistId is not configured in setup.ps1." -ForegroundColor Gray
-        Write-Host "  Contact your system administrator for setup assistance." -ForegroundColor Gray
-    }
-    $allOk = $false
-}
-
-# ── Step 3: Admin SSH key ─────────────────────────────────────────────────────
-
-Write-Host ""
 Step "Checking for admin SSH key..."
 
 if ((Test-Path $adminKey) -and -not $Refresh) {

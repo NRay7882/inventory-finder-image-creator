@@ -1,13 +1,13 @@
-# provision.conf - First-boot configuration for inventory client stations
+# station.conf - First-boot configuration for inventory client stations
 #
 # Place this file on the SD card's boot partition before first insertion:
-#   /boot/firmware/provision.conf  (verify path with: findmnt /boot/firmware)
+#   /boot/firmware/station.conf  (verify path with: findmnt /boot/firmware)
 #
-# The inventory-setup service reads this file on first boot to install
-# the deploy key, clone the repo, run provisioning, and register with
+# The inventory-setup service reads this file on first boot to configure
+# git credentials, clone the repo, run provisioning, and register with
 # the server. Sensitive fields are zeroed after successful setup.
 #
-# This file is NOT checked into the repo. Use provision.conf.example
+# This file is NOT checked into the repo. Use station.conf.example
 # as the template.
 
 # REQUIRED - Server registration secret (from server .env)
@@ -16,9 +16,9 @@ REGISTRATION_SECRET=
 # REQUIRED - Server URL for initial registration (pre-VPN, LAN or public)
 SERVER_URL=
 
-# REQUIRED - Fleet deploy key, base64-encoded (no line breaks)
-# Generate with: base64 -w 0 < inventory_deploy_key
-DEPLOY_KEY_B64=
+# REQUIRED - GitHub fine-grained PAT with read-only Contents access to inventory-finder
+# Create at: GitHub > Settings > Developer Settings > Personal Access Tokens > Fine-grained tokens
+GITHUB_PAT=
 
 # OPTIONAL - Admin SSH public key for passwordless login (recommended)
 # Paste the full contents of your admin public key (e.g. ~/.ssh/id_ed25519.pub)
