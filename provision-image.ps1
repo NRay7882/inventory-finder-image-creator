@@ -1,0 +1,743 @@
+<#
+.SYNOPSIS
+    Prepares a Raspberry Pi SD card: optionally flashes the OS image,
+    writes firstrun.sh for OS customisation, and writes provision.conf -
+    without opening Raspberry Pi Imager.
+
+.DESCRIPTION
+    Two modes:
+
+    Full mode  (-ImagePath provided):
+      1. Flashes the OS image via Raspberry Pi Imager CLI.
+      2. Writes firstrun.sh (hostname, user/password, SSH, WiFi, locale).
+      3. Writes provision.conf (deploy key, registration secret, etc.).
+
+    Provision-only mode  (-ImagePath omitted):
+      Writes provision.conf to an already-mounted boot partition.
+      Use when the card was flashed and customised separately.
+
+    Secrets are prompted securely unless supplied as arguments.
+    REGISTRATION_SECRET is read from server/.env automatically.
+    Password hashing requires WSL with openssl (standard on Windows 11).
+
+.PARAMETER ImagePath
+    Path to a .img or .img.xz file. Triggers full mode when supplied.
+
+.PARAMETER DiskNumber
+    SD card disk number (from Get-Disk). Auto-detected when one
+    removable USB disk is present.
+
+.PARAMETER Drive
+    Boot partition drive letter (e.g. D). Auto-detected from removable
+    FAT32 volumes labeled "bootfs" when omitted.
+
+.PARAMETER UserPassword
+    Password for the Pi OS user account. Prompted if omitted.
+    Required in full mode for firstrun.sh generation.
+
+.PARAMETER Hostname
+    Pi hostname. Default: rpi5-inventory
+
+.PARAMETER Username
+    Pi OS user to create. Default: rpi5
+
+.PARAMETER Timezone
+    Pi timezone. Default: America/New_York
+
+.PARAMETER KeyboardLayout
+    Keyboard layout. Default: us
+
+.PARAMETER WifiSsid
+    WiFi SSID. Leave blank for Ethernet-only.
+
+.PARAMETER WifiPassword
+    WiFi password. Prompted securely when WifiSsid is set.
+
+.PARAMETER WifiCountry
+    WiFi regulatory country code. Default: US
+
+.PARAMETER WifiSecurity
+    WiFi security type: wpa2 (default) or open (no password).
+
+.PARAMETER WifiHidden
+    Set to $true if the network has a hidden SSID. Default: $false.
+
+.PARAMETER Locale
+    System locale written to /etc/locale.gen. Default: en_US.UTF-8
+
+.PARAMETER ServerUrl
+    Server URL for initial registration. Example: http://192.168.2.100:8000
+
+.PARAMETER RegistrationSecret
+    From server .env REGISTRATION_SECRET. Read automatically when present.
+
+.PARAMETER DeployKeyPath
+    Fleet deploy private key file. Base64-encoded automatically.
+    Default: $env:USERPROFILE\.ssh\inventory_deploy
+
+.PARAMETER AdminSshKeyPath
+    Admin SSH public key file. Enables passwordless SSH on the Pi.
+    Default: $env:USERPROFILE\.ssh\id_ed25519.pub
+    Pass "" to skip.
+
+.PARAMETER StaticIp, StaticGateway, StaticPrefix, StaticDns
+    Optional static IP. Leave blank for DHCP.
+
+.EXAMPLE
+    .\provision-image.ps1 -ImagePath "C:\images\raspios-trixie-arm64-lite.img.xz"
+    Full automation. Prompts for passwords; reads secret from server\.env.
+
+.EXAMPLE
+    .\provision-image.ps1
+    Provision-only. Writes provision.conf to the already-mounted boot partition.
+#>
+[CmdletBinding(SupportsShouldProcess)]
+param(
+    [string]$ImagePath,
+    [int]$DiskNumber     = -1,
+    [string]$Drive,
+
+    # OS customisation (firstrun.sh, full mode only)
+    [string]$UserPassword,
+    [string]$Hostname        = "rpi5-inventory",
+    [string]$Username        = "rpi5",
+    [string]$Timezone        = "America/New_York",
+    [string]$KeyboardLayout  = "us",
+
+    # WiFi (used in both firstrun.sh and provision.conf)
+    [string]$WifiSsid,
+    [string]$WifiPassword,
+    [string]$WifiCountry   = "US",
+    [ValidateSet("wpa2","open")][string]$WifiSecurity = "wpa2",
+    [bool]$WifiHidden      = $false,
+
+    # OS locale
+    [string]$Locale = "en_US.UTF-8",
+
+    # provision.conf
+    [string]$ServerUrl,
+    [string]$RegistrationSecret,
+    [string]$DeployKeyPath   = "$env:USERPROFILE\.ssh\inventory_deploy",
+    [string]$AdminSshKeyPath = "$env:USERPROFILE\.ssh\id_ed25519.pub",
+    [string]$StaticIp,
+    [string]$StaticGateway,
+    [string]$StaticPrefix = "24",
+    [string]$StaticDns    = "8.8.8.8,1.1.1.1"
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+function Step { param([string]$m) Write-Host "  -> $m" -ForegroundColor Cyan }
+function Ok   { param([string]$m) Write-Host "  OK $m" -ForegroundColor Green }
+function Warn { param([string]$m) Write-Host "  ** $m" -ForegroundColor Yellow }
+function Fail { param([string]$m) Write-Host "  XX $m" -ForegroundColor Red; exit 1 }
+
+function Read-Secure {
+    param([string]$Prompt)
+    [Console]::Write("${Prompt}: ")
+
+    $prevCtrlC = [Console]::TreatControlCAsInput
+    [Console]::TreatControlCAsInput = $true
+    $chars = [System.Collections.Generic.List[char]]::new()
+
+    try {
+        while ($true) {
+            $key = [Console]::ReadKey($true)
+
+            if ($key.KeyChar -eq [char]3) {
+                [Console]::WriteLine("")
+                exit 1
+            }
+            if ($key.Key -eq [ConsoleKey]::Enter -or $key.KeyChar -eq [char]13) {
+                [Console]::WriteLine("")
+                break
+            }
+            if ($key.Key -eq [ConsoleKey]::Backspace -or $key.KeyChar -eq [char]8 -or $key.KeyChar -eq [char]127) {
+                if ($chars.Count -gt 0) {
+                    $chars.RemoveAt($chars.Count - 1)
+                    [Console]::Write([char]8)
+                    [Console]::Write(' ')
+                    [Console]::Write([char]8)
+                }
+                continue
+            }
+            if ($key.KeyChar -ne [char]0 -and -not [char]::IsControl($key.KeyChar)) {
+                $chars.Add($key.KeyChar)
+                [Console]::Write('*')
+            }
+        }
+    } finally {
+        [Console]::TreatControlCAsInput = $prevCtrlC
+    }
+
+    return -join $chars
+}
+
+
+function Find-RpiImager {
+    @(
+        "$env:ProgramFiles\Raspberry Pi Ltd\Imager\rpi-imager.exe",
+        "$env:ProgramFiles\Raspberry Pi Imager\rpi-imager.exe",
+        "${env:ProgramFiles(x86)}\Raspberry Pi Imager\rpi-imager.exe",
+        "$env:LOCALAPPDATA\Programs\Raspberry Pi Imager\rpi-imager.exe"
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+
+function Wait-BootPartition {
+    param([int]$TimeoutSeconds = 45)
+    $elapsed = 0
+    while ($elapsed -lt $TimeoutSeconds) {
+        $vol = Get-Volume -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.FileSystemLabel -eq "bootfs" -and
+                $_.FileSystem -in @("FAT32","FAT") -and
+                $_.DriveType -eq "Removable" -and
+                $_.DriveLetter
+            } | Select-Object -First 1
+        if ($vol) { return $vol }
+        Start-Sleep 2
+        $elapsed += 2
+    }
+    return $null
+}
+
+# ── Header ────────────────────────────────────────────────────────────────────
+
+Write-Host ""
+Write-Host "================================================" -ForegroundColor Cyan
+Write-Host "  Inventory Pi - Image Preparation" -ForegroundColor Cyan
+Write-Host "================================================" -ForegroundColor Cyan
+$fullMode = $ImagePath -ne ""
+Write-Host "  Mode: $(if ($fullMode) { 'Flash + Customise + Provision' } else { 'Provision only' })" -ForegroundColor Gray
+Write-Host ""
+
+if ($fullMode) {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltinRole]::Administrator)
+    if (-not $isAdmin) {
+        Fail "Full mode requires administrator privileges (rpi-imager needs elevation to write to a disk).`n  Re-run this script from an elevated PowerShell prompt: Run as Administrator."
+    }
+}
+
+# ── Step 1: Flash the image (full mode only) ──────────────────────────────────
+
+if ($fullMode) {
+    if (-not (Test-Path $ImagePath)) { Fail "Image file not found: $ImagePath" }
+
+    # Find target disk
+    if ($DiskNumber -eq -1) {
+        Step "Searching for removable USB disk..."
+        $removable = @(Get-Disk | Where-Object {
+            $_.BusType -eq "USB" -and $_.OperationalStatus -eq "Online"
+        })
+        if ($removable.Count -eq 0) {
+            Fail "No removable USB disk found. Insert the SD card and try again."
+        }
+        if ($removable.Count -gt 1) {
+            Warn "Multiple removable disks found:"
+            $removable | ForEach-Object {
+                Write-Host "  Disk $($_.Number): $($_.FriendlyName) ($([Math]::Round($_.Size/1GB,1)) GB)"
+            }
+            $DiskNumber = [int](Read-Host "Enter disk number for the SD card")
+        } else {
+            $DiskNumber = $removable[0].Number
+            Ok "SD card: Disk $DiskNumber - $($removable[0].FriendlyName) ($([Math]::Round($removable[0].Size/1GB,1)) GB)"
+        }
+    }
+
+    $disk = Get-Disk -Number $DiskNumber
+    Write-Host ""
+    Write-Host "  About to flash:" -ForegroundColor Yellow
+    Write-Host "    Source: $(Split-Path $ImagePath -Leaf)" -ForegroundColor Yellow
+    Write-Host "    Target: Disk $DiskNumber - $($disk.FriendlyName) ($([Math]::Round($disk.Size/1GB,1)) GB)" -ForegroundColor Yellow
+    Write-Host "    WARNING: ALL DATA ON THE DISK WILL BE ERASED" -ForegroundColor Red
+	Write-Host "    Popups for Windows Explorer & Insert Disk are normal & expected during this process" -ForegroundColor Red
+    Write-Host ""
+    if ((Read-Host "Type YES to continue") -ne "YES") { Write-Host "Aborted."; exit 0 }
+
+    $imager = Find-RpiImager
+    if (-not $imager) {
+        Fail "Raspberry Pi Imager not found. Install from raspberrypi.com/software."
+    }
+    Ok "Raspberry Pi Imager: $imager"
+
+    Step "Flashing $([Math]::Round((Get-Item $ImagePath).Length/1MB)) MB image to Disk $DiskNumber..."
+    Step "This takes several minutes - output is shown below when complete."
+    Write-Host ""
+
+    # rpi-imager spawns a child process for the actual disk write and the parent
+    # exits early. Using System.Diagnostics.Process with redirected streams causes
+    # the child to inherit the captured handles, so WaitAll blocks until the
+    # entire process tree (parent + write backend) finishes and closes stdout.
+    $psi                        = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName               = $imager
+    $psi.Arguments              = "--cli `"$ImagePath`" `"\\.\PhysicalDrive${DiskNumber}`""
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError  = $true
+    $psi.UseShellExecute        = $false
+
+    $imagerProc = New-Object System.Diagnostics.Process
+    $imagerProc.StartInfo = $psi
+    $imagerProc.Start() | Out-Null
+
+    $outTask = $imagerProc.StandardOutput.ReadToEndAsync()
+    $errTask = $imagerProc.StandardError.ReadToEndAsync()
+    [System.Threading.Tasks.Task]::WaitAll($outTask, $errTask)
+    $imagerProc.WaitForExit()
+
+    $imagerOut = $outTask.Result
+    if ($imagerOut) { Write-Host $imagerOut.TrimEnd() }
+    Write-Host ""
+
+    $writeOk = $imagerProc.ExitCode -eq 0 -or ($imagerOut -match "Write successful")
+    if (-not $writeOk) {
+        Fail "rpi-imager failed (exit $($imagerProc.ExitCode)). Check output above."
+    }
+    Ok "Image written"
+
+    # rpi-imager ejects the disk; wait for Windows to re-enumerate the partition
+    Step "Waiting for boot partition to appear (up to 60 s)..."
+    $bootVol = Wait-BootPartition -TimeoutSeconds 60
+    if (-not $bootVol) {
+        Warn "Boot partition not detected automatically."
+        Write-Host "  Safely eject and re-insert the SD card, then re-run without -ImagePath." -ForegroundColor Gray
+        exit 1
+    }
+    $Drive = $bootVol.DriveLetter
+    Ok "Boot partition: ${Drive}: (bootfs)"
+}
+
+# ── Step 2: Find boot partition (provision-only mode) ─────────────────────────
+
+if (-not $Drive) {
+    Step "Looking for boot partition (FAT32, label 'bootfs')..."
+    $bootVol = Get-Volume -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.FileSystemLabel -eq "bootfs" -and
+            $_.FileSystem -in @("FAT32","FAT") -and
+            $_.DriveType -eq "Removable" -and
+            $_.DriveLetter
+        } | Select-Object -First 1
+
+    if ($bootVol) {
+        $Drive = $bootVol.DriveLetter
+        Ok "Boot partition: ${Drive}: (bootfs)"
+    } else {
+        $candidates = @(Get-Volume -ErrorAction SilentlyContinue |
+            Where-Object { $_.FileSystem -in @("FAT32","FAT") -and $_.DriveType -eq "Removable" -and $_.DriveLetter })
+        if ($candidates.Count -eq 1) {
+            $Drive = $candidates[0].DriveLetter
+            Warn "No 'bootfs' label - using only removable FAT32 drive: ${Drive}: ($($candidates[0].FileSystemLabel))"
+        } elseif ($candidates.Count -gt 1) {
+            Warn "Multiple removable FAT32 drives:"
+            $candidates | ForEach-Object { Write-Host "  $($_.DriveLetter): ($($_.FileSystemLabel))" }
+            $Drive = (Read-Host "Enter drive letter for the Pi boot partition").TrimEnd(':').Trim()
+        } else {
+            Fail "No removable FAT32 drive found. Insert the SD card or specify -Drive D"
+        }
+    }
+}
+
+$Drive    = $Drive.TrimEnd(':')
+$bootPath = "${Drive}:"
+if (-not (Test-Path $bootPath)) { Fail "Drive ${bootPath} not found." }
+
+# ── Step 3: Collect passwords and generate firstrun.sh (full mode only) ───────
+
+if ($fullMode) {
+    Write-Host ""
+    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host "  Step 3: Enter credentials for the Pi image" -ForegroundColor Cyan
+    Write-Host "================================================" -ForegroundColor Cyan
+    Write-Host ""
+
+    if (-not $UserPassword) {
+        $UserPassword = Read-Secure "Password for Pi user '$Username'"
+        $pwConfirm    = Read-Secure "Confirm password for '$Username'"
+        if ($UserPassword -ne $pwConfirm) { Fail "Passwords do not match." }
+    }
+    if (-not $UserPassword) { Fail "User password is required in full mode." }
+
+    if ($WifiSsid -and $WifiSecurity -ne "open" -and -not $WifiPassword) {
+        $WifiPassword  = Read-Secure "WiFi password for '$WifiSsid'"
+        $wifiConfirm   = Read-Secure "Confirm WiFi password for '$WifiSsid'"
+        if ($WifiPassword -ne $wifiConfirm) { Fail "WiFi passwords do not match." }
+    }
+
+    # Write the password to a separate file on the boot partition.
+    # firstrun.sh pipes it directly to chpasswd, which handles all hashing.
+    # This avoids every layer of $ escaping (PowerShell -replace, bash double
+    # quotes, imager_custom internals) that has been corrupting the hash.
+    $pwFilePath = Join-Path $bootPath "userpassword.txt"
+    [IO.File]::WriteAllText($pwFilePath, "${Username}:${UserPassword}`n", [Text.UTF8Encoding]::new($false))
+    Ok "Credentials staged (deleted on first boot)"
+
+    # Build the WiFi block. imager_custom set_wpa takes <ssid> <password> <country> (3 args).
+    # scan_ssid=1 is needed for hidden networks in the wpa_supplicant fallback path.
+    $wifiHiddenInt = if ($WifiHidden) { "1" } else { "0" }
+
+    if ($WifiSsid) {
+        if ($WifiSecurity -eq "open") {
+            $wifiBlock = @"
+if [ -f /usr/lib/raspberrypi-sys-mods/imager_custom ]; then
+   /usr/lib/raspberrypi-sys-mods/imager_custom set_wpa '__SSID__' '' '__COUNTRY__'
+else
+   cat >/etc/wpa_supplicant/wpa_supplicant.conf <<'WPAEOF'
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=__COUNTRY__
+
+network={
+    ssid="__SSID__"
+    key_mgmt=NONE
+    scan_ssid=__WIFI_HIDDEN_INT__
+}
+WPAEOF
+   chmod 600 /etc/wpa_supplicant/wpa_supplicant.conf
+fi
+"@
+        } else {
+            $wifiBlock = @"
+if [ -f /usr/lib/raspberrypi-sys-mods/imager_custom ]; then
+   /usr/lib/raspberrypi-sys-mods/imager_custom set_wpa '__SSID__' '__WIFIPW__' '__COUNTRY__'
+else
+   cat >/etc/wpa_supplicant/wpa_supplicant.conf <<'WPAEOF'
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=__COUNTRY__
+
+network={
+    ssid="__SSID__"
+    psk="__WIFIPW__"
+    scan_ssid=__WIFI_HIDDEN_INT__
+}
+WPAEOF
+   chmod 600 /etc/wpa_supplicant/wpa_supplicant.conf
+fi
+"@
+        }
+    } else {
+        $wifiBlock = "# No WiFi configured - Ethernet-only deployment"
+    }
+
+    # firstrun.sh template - uses placeholder tokens to avoid PowerShell
+    # escape conflicts with bash dollar signs and backticks.
+    $firstrunTemplate = @'
+#!/bin/bash
+# firstrun.sh - generated by provision-image.ps1
+set +e
+
+CURRENT_HOSTNAME=`cat /etc/hostname | tr -d " \t\n\r"`
+FIRSTUSER=`getent passwd 1000 | cut -d: -f1`
+FIRSTUSERHOME=`getent passwd 1000 | cut -d: -f6`
+
+# Hostname
+if [ -f /usr/lib/raspberrypi-sys-mods/imager_custom ]; then
+   /usr/lib/raspberrypi-sys-mods/imager_custom set_hostname __HOSTNAME__
+else
+   echo __HOSTNAME__ >/etc/hostname
+   sed -i "s/127.0.1.1.*$CURRENT_HOSTNAME/127.0.1.1\t__HOSTNAME__/g" /etc/hosts
+fi
+
+# User account - rename the default UID-1000 user if needed, or create if absent
+if [ -n "$FIRSTUSER" ] && [ "$FIRSTUSER" != "__USERNAME__" ]; then
+   usermod -l "__USERNAME__" "$FIRSTUSER"
+   usermod -m -d /home/__USERNAME__ "__USERNAME__"
+   groupmod -n "__USERNAME__" "$FIRSTUSER"
+elif [ -z "$FIRSTUSER" ]; then
+   useradd -m -s /bin/bash "__USERNAME__"
+   usermod -aG sudo,adm,dialout,cdrom,audio,video,plugdev,input,netdev,gpio,i2c,spi "__USERNAME__" 2>/dev/null || true
+fi
+# Pi OS Trixie sets the default UID-1000 user shell to /usr/sbin/nologin to
+# force the setup wizard. Explicitly set bash so SSH sessions are not rejected.
+usermod -s /bin/bash "__USERNAME__"
+# Set password from file - chpasswd reads user:plaintext directly with no
+# shell escaping, then hashes it itself. File is deleted immediately after.
+chpasswd < /boot/firmware/userpassword.txt
+rm -f /boot/firmware/userpassword.txt
+
+# SSH
+if [ -f /usr/lib/raspberrypi-sys-mods/imager_custom ]; then
+   /usr/lib/raspberrypi-sys-mods/imager_custom enable_ssh
+else
+   systemctl enable ssh
+fi
+
+# Allow password authentication over SSH (provision.sh can tighten this later)
+sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config 2>/dev/null || true
+sed -i 's/^#\?KbdInteractiveAuthentication.*/KbdInteractiveAuthentication yes/' /etc/ssh/sshd_config 2>/dev/null || true
+
+# WiFi
+__WIFI_BLOCK__
+
+# Keyboard and timezone
+if [ -f /usr/lib/raspberrypi-sys-mods/imager_custom ]; then
+   /usr/lib/raspberrypi-sys-mods/imager_custom set_keymap '__KEYBOARD__'
+   /usr/lib/raspberrypi-sys-mods/imager_custom set_timezone '__TIMEZONE__'
+else
+   rm -f /etc/localtime
+   echo "__TIMEZONE__" >/etc/timezone
+   dpkg-reconfigure -f noninteractive tzdata
+   cat >/etc/default/keyboard <<'KBEOF'
+XKBMODEL="pc105"
+XKBLAYOUT="__KEYBOARD__"
+XKBVARIANT=""
+XKBOPTIONS=""
+KBEOF
+   dpkg-reconfigure -f noninteractive keyboard-configuration
+fi
+
+# Locale
+sed -i 's/^# *\(__LOCALE__\)/\1/' /etc/locale.gen 2>/dev/null || true
+locale-gen 2>/dev/null || true
+update-locale LANG=__LOCALE__ 2>/dev/null || true
+
+# Headless server target - graphical.target is for desktop environments.
+# multi-user.target is the correct default for a server/headless Pi.
+systemctl set-default multi-user.target 2>/dev/null || true
+
+# Prevent NetworkManager from blocking boot when the network is not immediately
+# available. Without this, the boot hangs at graphical.target waiting for a
+# fully established connection before releasing to the login prompt.
+systemctl disable NetworkManager-wait-online.service 2>/dev/null || true
+
+# Disable cloud-init - it looks for a cloud metadata server that does not exist
+# on a local network and will hang Boot 2 indefinitely waiting for a response.
+touch /etc/cloud/cloud-init.disabled
+for svc in cloud-init cloud-init-local cloud-config cloud-final; do
+   systemctl disable "$svc" 2>/dev/null || true
+   systemctl mask "$svc" 2>/dev/null || true
+done
+
+# Disable Pi OS first-boot wizard and Raspberry Pi Connect (rpi-connect).
+# userconfig.service owns tty1 on first boot - masking it removes the tty1
+# handler entirely. Disable only so it exits cleanly when the user is already
+# configured, then explicitly enable the standard getty to take over tty1.
+rm -f /etc/xdg/autostart/piwiz.desktop 2>/dev/null || true
+for svc in raspi-config userconfig; do
+   systemctl disable "$svc" 2>/dev/null || true
+done
+for svc in rpi-connect rpi-connect-wayland-proxy; do
+   systemctl disable "$svc" 2>/dev/null || true
+   systemctl mask "$svc" 2>/dev/null || true
+done
+systemctl enable getty@tty1.service 2>/dev/null || true
+
+# Install first_boot.sh and the inventory-setup service.
+# first_boot.sh (copied from the boot partition) handles: WiFi via NetworkManager,
+# deploy key installation, repo clone, full provisioning, and server registration.
+# The flag file prevents re-runs; first_boot.sh removes it on success.
+mkdir -p /opt/inventory /etc/inventory
+cp /boot/firmware/first_boot.sh /opt/inventory/first_boot.sh
+chmod +x /opt/inventory/first_boot.sh
+rm -f /boot/firmware/first_boot.sh
+touch /etc/inventory/first-boot-pending
+
+cat >/etc/systemd/system/inventory-setup.service <<'SVCEOF'
+[Unit]
+Description=Inventory Client - First Boot Setup
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/inventory/first-boot-pending
+
+[Service]
+Type=oneshot
+User=root
+Environment="PI_USER=__USERNAME__"
+ExecStart=/bin/bash /opt/inventory/first_boot.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+systemctl enable inventory-setup.service 2>/dev/null || true
+
+# Clean up - remove this script and the kernel cmdline trigger
+rm -f /boot/firmware/firstrun.sh
+sed -i 's| systemd.run.*||g' /boot/firmware/cmdline.txt
+exit 0
+'@
+
+    # String.Replace() is a literal substitution - unlike PowerShell's -replace
+    # operator (which uses .NET regex replacement syntax), it treats $ in the
+    # replacement value as a plain character. This is essential for the password
+    # hash ($6$salt$...) and any passwords that contain $ characters.
+    $firstrun = $firstrunTemplate
+    $firstrun = $firstrun.Replace('__HOSTNAME__',        $Hostname)
+    $firstrun = $firstrun.Replace('__USERNAME__',        $Username)
+    $firstrun = $firstrun.Replace('__SSID__',            $WifiSsid)
+    $firstrun = $firstrun.Replace('__WIFIPW__',          $WifiPassword)
+    $firstrun = $firstrun.Replace('__COUNTRY__',         $WifiCountry)
+    $firstrun = $firstrun.Replace('__KEYBOARD__',        $KeyboardLayout)
+    $firstrun = $firstrun.Replace('__TIMEZONE__',        $Timezone)
+    $firstrun = $firstrun.Replace('__LOCALE__',          $Locale)
+    $firstrun = $firstrun.Replace('__WIFI_HIDDEN_INT__', $wifiHiddenInt)
+    $firstrun = $firstrun.Replace('__WIFI_BLOCK__',      $wifiBlock)
+
+    # Write firstrun.sh - LF line endings, no BOM
+    $firstrunPath = Join-Path $bootPath "firstrun.sh"
+    [IO.File]::WriteAllText($firstrunPath, $firstrun.Replace("`r`n","`n"), [Text.UTF8Encoding]::new($false))
+    Ok "firstrun.sh written: $firstrunPath"
+
+    # Write first_boot.sh to boot partition - firstrun.sh copies it to /opt/inventory/
+    # and installs inventory-setup.service which runs it on Boot 2.
+    $firstBootSrc = Join-Path $PSScriptRoot "first_boot.sh"
+    if (Test-Path $firstBootSrc) {
+        $firstBootContent = [IO.File]::ReadAllText($firstBootSrc)
+        $firstBootPath = Join-Path $bootPath "first_boot.sh"
+        [IO.File]::WriteAllText($firstBootPath, $firstBootContent.Replace("`r`n", "`n"), [Text.UTF8Encoding]::new($false))
+        Ok "first_boot.sh written to boot partition"
+    } else {
+        Fail "first_boot.sh not found at $firstBootSrc"
+    }
+
+    # Modify cmdline.txt to trigger firstrun.sh on first boot
+    $cmdlinePath = Join-Path $bootPath "cmdline.txt"
+    if (Test-Path $cmdlinePath) {
+        $cmdline = (Get-Content $cmdlinePath -Raw).TrimEnd("`r","`n"," ")
+        if ($cmdline -notmatch "systemd.run=") {
+            $trigger = " systemd.run=/boot/firmware/firstrun.sh systemd.run_success_action=reboot systemd.run_failure_action=reboot"
+            [IO.File]::WriteAllText($cmdlinePath, $cmdline + $trigger + "`n", [Text.UTF8Encoding]::new($false))
+            Ok "cmdline.txt updated to trigger firstrun.sh on boot"
+        } else {
+            Ok "cmdline.txt already has systemd.run entry"
+        }
+    } else {
+        Warn "cmdline.txt not found - firstrun.sh will not run automatically"
+    }
+}
+
+# ── Step 4: provision.conf ────────────────────────────────────────────────────
+
+# Server URL - try server/.env first, then fall back to local machine IP
+if (-not $ServerUrl) {
+    $defaultUrl = ""
+    $serverEnvPath = Join-Path $PSScriptRoot "..\..\server\.env"
+    if (Test-Path $serverEnvPath) {
+        $urlLine = Get-Content $serverEnvPath -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match "^SERVER_URL=\S" } | Select-Object -First 1
+        if ($urlLine) { $defaultUrl = ($urlLine -split "=", 2)[1].Trim() }
+    }
+    if (-not $defaultUrl) {
+        $localIp = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.IPAddress -notmatch "^(127\.|169\.254\.)" -and
+                $_.PrefixOrigin -in @("Dhcp","Manual") -and
+                $_.InterfaceAlias -notmatch "^(vEthernet|Loopback|Tunnel|isatap|Teredo)"
+            } |
+            Select-Object -First 1 -ExpandProperty IPAddress
+        if ($localIp) { $defaultUrl = "http://${localIp}:8000" }
+    }
+    $urlPrompt  = if ($defaultUrl) { "Server URL [$defaultUrl]" } else { "Server URL (e.g. http://192.168.2.100:8000)" }
+    $urlEntered = (Read-Host $urlPrompt).Trim()
+    $ServerUrl  = if ($urlEntered) { $urlEntered } else { $defaultUrl }
+}
+if (-not $ServerUrl) { Fail "SERVER_URL is required." }
+Ok "Server URL: $ServerUrl"
+
+# Registration secret - auto-read from server/.env when on the same machine
+if (-not $RegistrationSecret) {
+    $serverEnv = Join-Path $PSScriptRoot "..\..\server\.env"
+    if (Test-Path $serverEnv) {
+        $line = Get-Content $serverEnv -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match "^REGISTRATION_SECRET=\S" } | Select-Object -First 1
+        if ($line) {
+            $RegistrationSecret = ($line -split "=", 2)[1].Trim()
+            Ok "Registration secret: read from server\.env"
+        }
+    }
+}
+if (-not $RegistrationSecret) {
+    $RegistrationSecret = Read-Secure "Registration secret (REGISTRATION_SECRET from server .env)"
+}
+if (-not $RegistrationSecret) { Fail "REGISTRATION_SECRET is required." }
+
+# Deploy key
+if (-not (Test-Path $DeployKeyPath -ErrorAction SilentlyContinue)) {
+    $DeployKeyPath = (Read-Host "Path to fleet deploy private key").Trim('"').Trim()
+}
+if (-not (Test-Path $DeployKeyPath)) { Fail "Deploy key not found: $DeployKeyPath" }
+$keyBytes  = [IO.File]::ReadAllBytes($DeployKeyPath)
+$keyHeader = [Text.Encoding]::UTF8.GetString($keyBytes, 0, [Math]::Min(40, $keyBytes.Length))
+if ($keyHeader -notmatch "BEGIN.*KEY") { Fail "Not an SSH private key: $DeployKeyPath" }
+$deployKeyB64 = [Convert]::ToBase64String($keyBytes)
+Ok "Deploy key: $DeployKeyPath ($($keyBytes.Length) bytes)"
+
+# Admin SSH public key
+$adminSshKey = ""
+if ($AdminSshKeyPath -ne "" -and (Test-Path $AdminSshKeyPath -ErrorAction SilentlyContinue)) {
+    $adminSshKey = (Get-Content $AdminSshKeyPath -Raw).Trim()
+    if ($adminSshKey -notmatch "^ssh-") {
+        Warn "Not an SSH public key: $AdminSshKeyPath"
+        $adminSshKey = ""
+    } else {
+        Ok "Admin SSH key: $AdminSshKeyPath"
+    }
+} elseif ($AdminSshKeyPath -ne "") {
+    Warn "Admin SSH key not found: $AdminSshKeyPath - password auth remains active"
+}
+
+# WiFi password for provision.conf (may already be set from firstrun.sh step)
+if ($WifiSsid -and $WifiSecurity -ne "open" -and -not $WifiPassword) {
+    $WifiPassword = Read-Secure "WiFi password for '$WifiSsid'"
+}
+
+# Write provision.conf
+$outFile      = Join-Path $bootPath "provision.conf"
+$adminLine    = if ($adminSshKey)  { "ADMIN_SSH_KEY='$adminSshKey'" }  else { "ADMIN_SSH_KEY=" }
+$wifiPassLine = if ($WifiPassword) { "WIFI_PASSWORD='$WifiPassword'" } else { "WIFI_PASSWORD=" }
+
+Step "Writing provision.conf to $outFile..."
+
+$conf = @"
+# provision.conf - First-boot configuration for inventory client station
+# Written $(Get-Date -Format "yyyy-MM-dd HH:mm") by provision-image.ps1
+#
+# Sensitive fields are zeroed automatically after successful first boot.
+
+# REQUIRED
+REGISTRATION_SECRET=$RegistrationSecret
+SERVER_URL=$ServerUrl
+DEPLOY_KEY_B64=$deployKeyB64
+
+# OPTIONAL - Admin SSH public key (enables passwordless SSH, disables password auth)
+$adminLine
+
+# OPTIONAL - WiFi (leave blank for Ethernet-only)
+WIFI_SSID=$WifiSsid
+$wifiPassLine
+WIFI_COUNTRY=$WifiCountry
+
+# OPTIONAL - Static IP (leave blank for DHCP)
+STATIC_IP=$StaticIp
+STATIC_GATEWAY=$StaticGateway
+STATIC_PREFIX=$StaticPrefix
+STATIC_DNS=$StaticDns
+"@
+
+[IO.File]::WriteAllText($outFile, $conf.Replace("`r`n", "`n"), [Text.UTF8Encoding]::new($false))
+Ok "provision.conf written"
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+
+Write-Host ""
+Write-Host "================================================" -ForegroundColor Green
+Write-Host "  Done" -ForegroundColor Green
+Write-Host "================================================" -ForegroundColor Green
+Write-Host ""
+if ($fullMode) {
+    Write-Host "  The SD card is ready. Safely eject it from Windows, then:" -ForegroundColor Gray
+    Write-Host "  1. Insert into the Pi and power on" -ForegroundColor Gray
+    Write-Host "  2. Boot 1: firstrun.sh runs, Pi reboots automatically (~1 min)" -ForegroundColor Gray
+    Write-Host "  3. Boot 2: first_boot.sh runs - provisioning + registration (~5 min)" -ForegroundColor Gray
+    Write-Host "  4. Accept the station at: $ServerUrl/admin/clients" -ForegroundColor Gray
+    Write-Host "  5. Monitor: ssh ${Username}@<pi-ip>  then: tail -f ~/first-boot.log" -ForegroundColor Gray
+} else {
+    Write-Host "  Safely eject the SD card, insert into the Pi, and power on." -ForegroundColor Gray
+    Write-Host "  first_boot.sh runs on the next boot (~5 min)." -ForegroundColor Gray
+    Write-Host "  Accept the station at: $ServerUrl/admin/clients" -ForegroundColor Gray
+}
+Write-Host ""
