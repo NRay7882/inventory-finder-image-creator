@@ -47,3 +47,7 @@ htmlcov/
 
 # Station config (written to SD card boot partition - may contain secrets)
 station.conf
+
+# Saved defaults for create-image scripts (may contain DPAPI-encrypted secrets)
+.create-image.defaults.json
+.create-image.defaults

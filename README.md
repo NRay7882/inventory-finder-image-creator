@@ -49,6 +49,8 @@ Must be run as Administrator (rpi-imager requires elevation to write to a disk).
 .\create-image.ps1 -ImagePath "C:\images\raspios-trixie-arm64-lite.img.xz" -WifiSsid "IoTLAN-5G"
 ```
 
+Pass a directory to `-ImagePath` and the script will find the `.img.xz` inside it automatically. If more than one is found, it prompts you to choose (newest first).
+
 **Provision-only** - write station.conf to an already-flashed card:
 ```powershell
 .\create-image.ps1 -WifiSsid "IoTLAN-5G"
@@ -56,15 +58,17 @@ Must be run as Administrator (rpi-imager requires elevation to write to a disk).
 
 Run `Get-Help .\create-image.ps1 -Full` for all parameters.
 
+**Saved defaults:** After each successful run the script saves all settings to `.create-image.defaults.json` (gitignored). On the next run, non-sensitive values are restored automatically; sensitive values (Pi password, WiFi password, GitHub PAT, registration secret) are stored DPAPI-encrypted and shown as `[saved - Enter to keep]` at the prompt. Pass any parameter explicitly to override and update the saved value.
+
 **Key parameters:**
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `-ImagePath` | *(omit for provision-only)* | `.img` or `.img.xz` file to flash |
+| `-ImagePath` | *(omit for provision-only)* | `.img`/`.img.xz` file **or directory** containing one |
 | `-Hostname` | `rpi5-inventory` | Pi hostname |
 | `-Username` | `rpi5` | OS user account to create |
 | `-WifiSsid` | *(blank = Ethernet-only)* | WiFi network name |
-| `-ServerUrl` | *(prompted)* | Server base URL, e.g. `http://192.168.2.100:8000` |
+| `-ServerUrl` | *(from .env or prompt)* | Server base URL, e.g. `http://192.168.2.100:8000` |
 | `-GithubPat` | *(prompted)* | GitHub PAT with read-only Contents access to inventory-finder |
 | `-AdminSshKeyPath` | `~\.ssh\id_ed25519.pub` | Admin public key (pass `""` to skip) |
 | `-StaticIp` | *(blank = DHCP)* | Optional static IP for the Pi |

@@ -125,6 +125,9 @@ param(
     [string]$StaticDns    = "8.8.8.8,1.1.1.1"
 )
 
+# Capture which params were explicitly supplied before any defaults are applied
+$_explicitParams = [System.Collections.Generic.HashSet[string]]($PSBoundParameters.Keys)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -202,6 +205,121 @@ function Wait-BootPartition {
     return $null
 }
 
+# ── Saved defaults (persisted across runs via DPAPI-encrypted JSON) ───────────
+
+$script:ConfigPath = Join-Path $PSScriptRoot ".create-image.defaults.json"
+
+function Import-Conf {
+    if (-not (Test-Path $script:ConfigPath)) { return @{} }
+    try { return Get-Content $script:ConfigPath -Raw -ErrorAction Stop | ConvertFrom-Json -AsHashtable }
+    catch { return @{} }
+}
+
+function Export-Conf {
+    param([hashtable]$Config)
+    try { $Config | ConvertTo-Json -Depth 2 | Set-Content $script:ConfigPath -Encoding UTF8 }
+    catch { Warn "Could not save defaults: $_" }
+}
+
+function Protect-Value {
+    param([string]$PlainText)
+    if (-not $PlainText) { return "" }
+    try { return ConvertFrom-SecureString (ConvertTo-SecureString $PlainText -AsPlainText -Force) }
+    catch { return "" }
+}
+
+function Unprotect-Value {
+    param([string]$Encrypted)
+    if (-not $Encrypted) { return "" }
+    try {
+        $ss  = ConvertTo-SecureString $Encrypted
+        $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($ss)
+        try   { return [Runtime.InteropServices.Marshal]::PtrToStringAuto($ptr) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+    } catch { return "" }
+}
+
+# Like Read-Secure, but if a saved (DPAPI-encrypted) value exists the prompt
+# shows "[saved - Enter to keep]" and pressing Enter returns that saved value.
+function Read-DefaultSecure {
+    param([string]$Prompt, [string]$SavedEnc = "")
+    $savedPlain = Unprotect-Value $SavedEnc
+    if ($savedPlain) {
+        [Console]::Write("${Prompt} [saved - Enter to keep]: ")
+    } else {
+        [Console]::Write("${Prompt}: ")
+    }
+
+    $prevCtrlC = [Console]::TreatControlCAsInput
+    [Console]::TreatControlCAsInput = $true
+    $chars = [System.Collections.Generic.List[char]]::new()
+    try {
+        while ($true) {
+            $key = [Console]::ReadKey($true)
+            if ($key.KeyChar -eq [char]3)                                                                        { [Console]::WriteLine(""); exit 1 }
+            if ($key.Key -eq [ConsoleKey]::Enter -or $key.KeyChar -eq [char]13)                                  { [Console]::WriteLine(""); break }
+            if ($key.Key -eq [ConsoleKey]::Backspace -or $key.KeyChar -eq [char]8 -or $key.KeyChar -eq [char]127) {
+                if ($chars.Count -gt 0) {
+                    $chars.RemoveAt($chars.Count - 1)
+                    [Console]::Write([char]8); [Console]::Write(' '); [Console]::Write([char]8)
+                }
+                continue
+            }
+            if ($key.KeyChar -ne [char]0 -and -not [char]::IsControl($key.KeyChar)) {
+                $chars.Add($key.KeyChar); [Console]::Write('*')
+            }
+        }
+    } finally { [Console]::TreatControlCAsInput = $prevCtrlC }
+
+    $entered = -join $chars
+    if ($entered)     { return $entered }
+    if ($savedPlain)  { return $savedPlain }
+    return ""
+}
+
+# ── Load saved defaults ───────────────────────────────────────────────────────
+
+$_cfg = Import-Conf
+
+# Apply saved non-sensitive values for any param that was not explicitly provided
+foreach ($k in @('ImagePath','Hostname','Username','Timezone','KeyboardLayout',
+                  'WifiSsid','WifiCountry','WifiSecurity','WifiHidden','Locale',
+                  'ServerUrl','AdminSshKeyPath','StaticIp','StaticGateway','StaticPrefix','StaticDns')) {
+    if (-not $_explicitParams.Contains($k)) {
+        $saved = if ($_cfg.ContainsKey($k)) { $_cfg[$k] } else { $null }
+        if ($saved -ne $null -and $saved -ne '') {
+            if ($k -eq 'WifiHidden') { Set-Variable -Name $k -Value ([bool]$saved) }
+            else                     { Set-Variable -Name $k -Value ([string]$saved) }
+        }
+    }
+}
+
+# Stash saved encrypted values - used later in password prompts
+$_savedUserPwEnc    = if ($_cfg.ContainsKey('UserPasswordEnc'))        { $_cfg['UserPasswordEnc'] }        else { '' }
+$_savedWifiPwEnc    = if ($_cfg.ContainsKey('WifiPasswordEnc'))        { $_cfg['WifiPasswordEnc'] }        else { '' }
+$_savedGithubPatEnc = if ($_cfg.ContainsKey('GithubPatEnc'))           { $_cfg['GithubPatEnc'] }           else { '' }
+$_savedRegSecEnc    = if ($_cfg.ContainsKey('RegistrationSecretEnc'))  { $_cfg['RegistrationSecretEnc'] }  else { '' }
+
+# Resolve ImagePath directory -> specific .img.xz file
+if ($ImagePath -and (Test-Path $ImagePath -PathType Container)) {
+    $imgFiles = @(Get-ChildItem -Path $ImagePath -Filter "*.img.xz" -File)
+    if ($imgFiles.Count -eq 0) {
+        Fail "No .img.xz files found in: $ImagePath"
+    } elseif ($imgFiles.Count -eq 1) {
+        $ImagePath = $imgFiles[0].FullName
+    } else {
+        $imgFiles = $imgFiles | Sort-Object LastWriteTime -Descending
+        Write-Host ""
+        Write-Host "  Multiple images found - select one:" -ForegroundColor Yellow
+        for ($i = 0; $i -lt $imgFiles.Count; $i++) {
+            Write-Host "  [$($i+1)] $($imgFiles[$i].Name)  ($($imgFiles[$i].LastWriteTime.ToString('yyyy-MM-dd')))" -ForegroundColor Gray
+        }
+        $choice = [int](Read-Host "  Select image (1-$($imgFiles.Count))")
+        if ($choice -lt 1 -or $choice -gt $imgFiles.Count) { Fail "Invalid selection." }
+        $ImagePath = $imgFiles[$choice-1].FullName
+    }
+}
+
 # ── Header ────────────────────────────────────────────────────────────────────
 
 Write-Host ""
@@ -210,6 +328,7 @@ Write-Host "  Inventory Pi - Image Preparation" -ForegroundColor Cyan
 Write-Host "================================================" -ForegroundColor Cyan
 $fullMode = $ImagePath -ne ""
 Write-Host "  Mode: $(if ($fullMode) { 'Flash + Customise + Provision' } else { 'Provision only' })" -ForegroundColor Gray
+if ($fullMode) { Write-Host "  Image: $(Split-Path $ImagePath -Leaf)" -ForegroundColor Gray }
 Write-Host ""
 
 if ($fullMode) {
@@ -353,16 +472,22 @@ if ($fullMode) {
     Write-Host ""
 
     if (-not $UserPassword) {
-        $UserPassword = Read-Secure "Password for Pi user '$Username'"
-        $pwConfirm    = Read-Secure "Confirm password for '$Username'"
-        if ($UserPassword -ne $pwConfirm) { Fail "Passwords do not match." }
+        $savedUserPw  = Unprotect-Value $_savedUserPwEnc
+        $UserPassword = Read-DefaultSecure "Password for Pi user '$Username'" $_savedUserPwEnc
+        if ($UserPassword -ne $savedUserPw) {
+            $pwConfirm = Read-Secure "Confirm password for '$Username'"
+            if ($UserPassword -ne $pwConfirm) { Fail "Passwords do not match." }
+        }
     }
     if (-not $UserPassword) { Fail "User password is required in full mode." }
 
     if ($WifiSsid -and $WifiSecurity -ne "open" -and -not $WifiPassword) {
-        $WifiPassword  = Read-Secure "WiFi password for '$WifiSsid'"
-        $wifiConfirm   = Read-Secure "Confirm WiFi password for '$WifiSsid'"
-        if ($WifiPassword -ne $wifiConfirm) { Fail "WiFi passwords do not match." }
+        $savedWifiPw  = Unprotect-Value $_savedWifiPwEnc
+        $WifiPassword = Read-DefaultSecure "WiFi password for '$WifiSsid'" $_savedWifiPwEnc
+        if ($WifiPassword -ne $savedWifiPw) {
+            $wifiConfirm = Read-Secure "Confirm WiFi password for '$WifiSsid'"
+            if ($WifiPassword -ne $wifiConfirm) { Fail "WiFi passwords do not match." }
+        }
     }
 
     # Write the password to a separate file on the boot partition.
@@ -612,25 +737,28 @@ exit 0
 
 # ── Step 4: station.conf ────────────────────────────────────────────────────
 
-# Server URL - try server/.env first, then fall back to local machine IP
-if (-not $ServerUrl) {
-    $defaultUrl = ""
+# Server URL - .env has highest priority, then saved config, then auto-detect + prompt
+if (-not $_explicitParams.Contains('ServerUrl')) {
     $serverEnvPath = Join-Path $PSScriptRoot "..\..\server\.env"
     if (Test-Path $serverEnvPath) {
         $urlLine = Get-Content $serverEnvPath -ErrorAction SilentlyContinue |
             Where-Object { $_ -match "^SERVER_URL=\S" } | Select-Object -First 1
-        if ($urlLine) { $defaultUrl = ($urlLine -split "=", 2)[1].Trim() }
+        if ($urlLine) {
+            $envUrl = ($urlLine -split "=", 2)[1].Trim()
+            if ($envUrl) { $ServerUrl = $envUrl }
+        }
     }
-    if (-not $defaultUrl) {
-        $localIp = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.IPAddress -notmatch "^(127\.|169\.254\.)" -and
-                $_.PrefixOrigin -in @("Dhcp","Manual") -and
-                $_.InterfaceAlias -notmatch "^(vEthernet|Loopback|Tunnel|isatap|Teredo)"
-            } |
-            Select-Object -First 1 -ExpandProperty IPAddress
-        if ($localIp) { $defaultUrl = "http://${localIp}:8000" }
-    }
+}
+if (-not $ServerUrl) {
+    $defaultUrl = ""
+    $localIp = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.IPAddress -notmatch "^(127\.|169\.254\.)" -and
+            $_.PrefixOrigin -in @("Dhcp","Manual") -and
+            $_.InterfaceAlias -notmatch "^(vEthernet|Loopback|Tunnel|isatap|Teredo)"
+        } |
+        Select-Object -First 1 -ExpandProperty IPAddress
+    if ($localIp) { $defaultUrl = "http://${localIp}:8000" }
     $urlPrompt  = if ($defaultUrl) { "Server URL [$defaultUrl]" } else { "Server URL (e.g. http://192.168.2.100:8000)" }
     $urlEntered = (Read-Host $urlPrompt).Trim()
     $ServerUrl  = if ($urlEntered) { $urlEntered } else { $defaultUrl }
@@ -638,26 +766,29 @@ if (-not $ServerUrl) {
 if (-not $ServerUrl) { Fail "SERVER_URL is required." }
 Ok "Server URL: $ServerUrl"
 
-# Registration secret - auto-read from server/.env when on the same machine
-if (-not $RegistrationSecret) {
+# Registration secret - .env has highest priority, then prompt (with saved fallback)
+if (-not $_explicitParams.Contains('RegistrationSecret')) {
     $serverEnv = Join-Path $PSScriptRoot "..\..\server\.env"
     if (Test-Path $serverEnv) {
         $line = Get-Content $serverEnv -ErrorAction SilentlyContinue |
             Where-Object { $_ -match "^REGISTRATION_SECRET=\S" } | Select-Object -First 1
         if ($line) {
-            $RegistrationSecret = ($line -split "=", 2)[1].Trim()
-            Ok "Registration secret: read from server\.env"
+            $envSecret = ($line -split "=", 2)[1].Trim()
+            if ($envSecret) {
+                $RegistrationSecret = $envSecret
+                Ok "Registration secret: read from server\.env"
+            }
         }
     }
 }
 if (-not $RegistrationSecret) {
-    $RegistrationSecret = Read-Secure "Registration secret (REGISTRATION_SECRET from server .env)"
+    $RegistrationSecret = Read-DefaultSecure "Registration secret (REGISTRATION_SECRET from server .env)" $_savedRegSecEnc
 }
 if (-not $RegistrationSecret) { Fail "REGISTRATION_SECRET is required." }
 
 # GitHub PAT
 if (-not $GithubPat) {
-    $GithubPat = Read-Secure "GitHub PAT (inventory-fleet-deploy, read-only Contents)"
+    $GithubPat = Read-DefaultSecure "GitHub PAT (inventory-fleet-deploy, read-only Contents)" $_savedGithubPatEnc
 }
 if (-not $GithubPat) { Fail "GITHUB_PAT is required." }
 if ($GithubPat -notmatch "^ghp_") { Warn "PAT does not look like a fine-grained token (expected ghp_ prefix)" }
@@ -679,7 +810,7 @@ if ($AdminSshKeyPath -ne "" -and (Test-Path $AdminSshKeyPath -ErrorAction Silent
 
 # WiFi password for station.conf (may already be set from firstrun.sh step)
 if ($WifiSsid -and $WifiSecurity -ne "open" -and -not $WifiPassword) {
-    $WifiPassword = Read-Secure "WiFi password for '$WifiSsid'"
+    $WifiPassword = Read-DefaultSecure "WiFi password for '$WifiSsid'" $_savedWifiPwEnc
 }
 
 # Write station.conf
@@ -717,6 +848,32 @@ STATIC_DNS=$StaticDns
 
 [IO.File]::WriteAllText($outFile, $conf.Replace("`r`n", "`n"), [Text.UTF8Encoding]::new($false))
 Ok "station.conf written"
+
+# Save non-sensitive settings and DPAPI-encrypted secrets for next run
+$newCfg = [ordered]@{
+    ImagePath             = $ImagePath
+    Hostname              = $Hostname
+    Username              = $Username
+    Timezone              = $Timezone
+    KeyboardLayout        = $KeyboardLayout
+    WifiSsid              = $WifiSsid
+    WifiCountry           = $WifiCountry
+    WifiSecurity          = $WifiSecurity
+    WifiHidden            = $WifiHidden
+    Locale                = $Locale
+    ServerUrl             = $ServerUrl
+    AdminSshKeyPath       = $AdminSshKeyPath
+    StaticIp              = $StaticIp
+    StaticGateway         = $StaticGateway
+    StaticPrefix          = $StaticPrefix
+    StaticDns             = $StaticDns
+    UserPasswordEnc       = if ($UserPassword)        { Protect-Value $UserPassword }        else { $_savedUserPwEnc }
+    WifiPasswordEnc       = if ($WifiPassword)        { Protect-Value $WifiPassword }        else { $_savedWifiPwEnc }
+    GithubPatEnc          = if ($GithubPat)           { Protect-Value $GithubPat }           else { $_savedGithubPatEnc }
+    RegistrationSecretEnc = if ($RegistrationSecret)  { Protect-Value $RegistrationSecret }  else { $_savedRegSecEnc }
+}
+Export-Conf $newCfg
+Ok "Settings saved for next run ($($script:ConfigPath | Split-Path -Leaf))"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 
