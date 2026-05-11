@@ -314,6 +314,21 @@ printf 'https://%s@github.com\n' "$GITHUB_PAT" > "$CRED_FILE"
 chmod 600 "$CRED_FILE"
 fix_owner "$CRED_FILE"
 
+# git is not installed by default on Pi OS Lite - install it now so
+# git config and the clone in Step 4 both have it available.
+if ! command -v git &>/dev/null; then
+    info "git not found - installing via apt..."
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq git >/dev/null 2>&1
+    if command -v git &>/dev/null; then
+        ok "git installed"
+    else
+        abort "git installation failed. Check network connectivity."
+    fi
+else
+    ok "git available"
+fi
+
 git config --global credential.helper store
 ok "GitHub credentials configured"
 
@@ -332,24 +347,11 @@ fi
 fix_owner "${PI_HOME}/.ssh"
 
 # =====================================================================
-# STEP 4: Ensure git is available and clone the repo
+# STEP 4: Clone the repo
 # =====================================================================
 
 log ""
 log -e "${CYAN}[4/7] Repository setup${NC}"
-
-if ! command -v git &>/dev/null; then
-    info "Installing git..."
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq git >/dev/null 2>&1
-    if command -v git &>/dev/null; then
-        ok "git installed"
-    else
-        abort "git installation failed. Check network connectivity."
-    fi
-else
-    ok "git available"
-fi
 
 # git 2.35.2+ refuses to operate on repos owned by a different user.
 # Running as root on a PI_USER-owned repo triggers this on retry runs
