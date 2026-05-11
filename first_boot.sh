@@ -308,11 +308,19 @@ mkdir -p "${PI_HOME}/.ssh"
 chmod 700 "${PI_HOME}/.ssh"
 
 # Write ~/.git-credentials so git HTTPS auth works without prompting.
-# git credential store reads the first matching line: https://<token>@github.com
+# Format must be https://username:password@host - GitHub accepts any username
+# and uses the PAT as the password. Writing just https://TOKEN@github.com puts
+# the token in the username field (no password), causing git to fall back to
+# interactive prompting, which fails with no TTY in a systemd service.
 CRED_FILE="${PI_HOME}/.git-credentials"
-printf 'https://%s@github.com\n' "$GITHUB_PAT" > "$CRED_FILE"
+printf 'https://x-access-token:%s@github.com\n' "$GITHUB_PAT" > "$CRED_FILE"
 chmod 600 "$CRED_FILE"
 fix_owner "$CRED_FILE"
+
+# Prevent git from ever attempting interactive credential prompts.
+# Without this, a credential lookup failure hangs or errors with
+# "no such device or address" because there is no TTY.
+export GIT_TERMINAL_PROMPT=0
 
 # git is not installed by default on Pi OS Lite - install it now so
 # git config and the clone in Step 4 both have it available.
