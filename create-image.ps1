@@ -489,14 +489,29 @@ if ($fullMode) {
         })
 
         if ($removable.Count -gt 1) {
-            Write-Host "  Removable USB disks found:" -ForegroundColor Yellow
-            $candidates | ForEach-Object {
-                $line   = Format-DiskLine -DiskObj $_.Disk -Detail $_.Detail
-                $color  = if ($_.Detail.IsThumbDrive) { 'Yellow' } else { 'Gray' }
-                Write-Host "    $line" -ForegroundColor $color
-                if ($_.Detail.SizeWarning) { Write-Host "      Size: $($_.Detail.SizeWarning)" -ForegroundColor Yellow }
+            $cardReaders = @($candidates | Where-Object { $_.Detail.IsCardReader })
+            $thumbDrives = @($candidates | Where-Object { $_.Detail.IsThumbDrive })
+
+            if ($cardReaders.Count -eq 1) {
+                # Unambiguous: one card reader, everything else is a thumb drive or unknown
+                $picked = $cardReaders[0]
+                $DiskNumber = $picked.Disk.Number
+                Ok "Target: $(Format-DiskLine -DiskObj $picked.Disk -Detail $picked.Detail)"
+                if ($picked.Detail.SizeWarning) { Warn "Size: $($picked.Detail.SizeWarning)" }
+                $thumbDrives | ForEach-Object {
+                    Warn "Skipping Disk $($_.Disk.Number) ($($_.Disk.FriendlyName)) - detected as USB thumb drive"
+                }
+            } else {
+                # Ambiguous (0 or 2+ card readers) - list all and ask
+                Write-Host "  Removable USB disks found:" -ForegroundColor Yellow
+                $candidates | ForEach-Object {
+                    $line   = Format-DiskLine -DiskObj $_.Disk -Detail $_.Detail
+                    $color  = if ($_.Detail.IsThumbDrive) { 'Yellow' } else { 'Gray' }
+                    Write-Host "    $line" -ForegroundColor $color
+                    if ($_.Detail.SizeWarning) { Write-Host "      Size: $($_.Detail.SizeWarning)" -ForegroundColor Yellow }
+                }
+                $DiskNumber = [int](Read-Host "  Enter disk number for the SD card")
             }
-            $DiskNumber = [int](Read-Host "  Enter disk number for the SD card")
         } else {
             # Single removable disk - refuse to auto-select if it looks like a thumb drive
             $only = $candidates[0]
