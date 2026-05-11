@@ -685,7 +685,7 @@ if [[ -z "$GITHUB_PAT" ]]; then
     GITHUB_PAT=$(read_secure "GitHub PAT (inventory-fleet-deploy, read-only Contents)")
 fi
 [[ -n "$GITHUB_PAT" ]] || fail "GITHUB_PAT is required."
-[[ "$GITHUB_PAT" == ghp_* ]] || warn "PAT does not look like a fine-grained token (expected ghp_ prefix)"
+[[ "$GITHUB_PAT" == ghp_* || "$GITHUB_PAT" == github_pat_* ]] || warn "PAT does not look like a GitHub token (expected ghp_ or github_pat_ prefix)"
 ok "GitHub PAT: provided"
 
 ADMIN_SSH_KEY=""

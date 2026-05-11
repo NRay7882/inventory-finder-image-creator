@@ -335,7 +335,12 @@ $script:ConfigPath = Join-Path $PSScriptRoot ".create-image.defaults.json"
 
 function Import-Conf {
     if (-not (Test-Path $script:ConfigPath)) { return @{} }
-    try { return Get-Content $script:ConfigPath -Raw -ErrorAction Stop | ConvertFrom-Json -AsHashtable }
+    try {
+        $obj = Get-Content $script:ConfigPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        $ht = @{}
+        foreach ($prop in $obj.PSObject.Properties) { $ht[$prop.Name] = $prop.Value }
+        return $ht
+    }
     catch { return @{} }
 }
 
@@ -412,8 +417,8 @@ foreach ($k in @('ImagePath','Hostname','Username','Timezone','KeyboardLayout',
     if (-not $_explicitParams.Contains($k)) {
         $saved = if ($_cfg.ContainsKey($k)) { $_cfg[$k] } else { $null }
         if ($saved -ne $null -and $saved -ne '') {
-            if ($k -eq 'WifiHidden') { Set-Variable -Name $k -Value ([bool]$saved) }
-            else                     { Set-Variable -Name $k -Value ([string]$saved) }
+            if ($k -eq 'WifiHidden') { Set-Variable -Name $k -Value ([bool]$saved) -Scope Script }
+            else                     { Set-Variable -Name $k -Value ([string]$saved) -Scope Script }
         }
     }
 }
@@ -620,21 +625,29 @@ if ($fullMode) {
     Write-Host ""
 
     if (-not $UserPassword) {
-        $savedUserPw  = Unprotect-Value $_savedUserPwEnc
-        $UserPassword = Read-DefaultSecure "Password for Pi user '$Username'" $_savedUserPwEnc
-        if ($UserPassword -ne $savedUserPw) {
-            $pwConfirm = Read-Secure "Confirm password for '$Username'"
-            if ($UserPassword -ne $pwConfirm) { Fail "Passwords do not match." }
+        if ($_savedUserPwEnc -and -not $_explicitParams.Contains('UserPassword')) {
+            $UserPassword = Unprotect-Value $_savedUserPwEnc
+        } else {
+            $savedUserPw  = Unprotect-Value $_savedUserPwEnc
+            $UserPassword = Read-DefaultSecure "Password for Pi user '$Username'" $_savedUserPwEnc
+            if ($UserPassword -ne $savedUserPw) {
+                $pwConfirm = Read-Secure "Confirm password for '$Username'"
+                if ($UserPassword -ne $pwConfirm) { Fail "Passwords do not match." }
+            }
         }
     }
     if (-not $UserPassword) { Fail "User password is required in full mode." }
 
     if ($WifiSsid -and $WifiSecurity -ne "open" -and -not $WifiPassword) {
-        $savedWifiPw  = Unprotect-Value $_savedWifiPwEnc
-        $WifiPassword = Read-DefaultSecure "WiFi password for '$WifiSsid'" $_savedWifiPwEnc
-        if ($WifiPassword -ne $savedWifiPw) {
-            $wifiConfirm = Read-Secure "Confirm WiFi password for '$WifiSsid'"
-            if ($WifiPassword -ne $wifiConfirm) { Fail "WiFi passwords do not match." }
+        if ($_savedWifiPwEnc -and -not $_explicitParams.Contains('WifiPassword')) {
+            $WifiPassword = Unprotect-Value $_savedWifiPwEnc
+        } else {
+            $savedWifiPw  = Unprotect-Value $_savedWifiPwEnc
+            $WifiPassword = Read-DefaultSecure "WiFi password for '$WifiSsid'" $_savedWifiPwEnc
+            if ($WifiPassword -ne $savedWifiPw) {
+                $wifiConfirm = Read-Secure "Confirm WiFi password for '$WifiSsid'"
+                if ($WifiPassword -ne $wifiConfirm) { Fail "WiFi passwords do not match." }
+            }
         }
     }
 
@@ -930,16 +943,24 @@ if (-not $_explicitParams.Contains('RegistrationSecret')) {
     }
 }
 if (-not $RegistrationSecret) {
-    $RegistrationSecret = Read-DefaultSecure "Registration secret (REGISTRATION_SECRET from server .env)" $_savedRegSecEnc
+    if ($_savedRegSecEnc -and -not $_explicitParams.Contains('RegistrationSecret')) {
+        $RegistrationSecret = Unprotect-Value $_savedRegSecEnc
+    } else {
+        $RegistrationSecret = Read-DefaultSecure "Registration secret (REGISTRATION_SECRET from server .env)" $_savedRegSecEnc
+    }
 }
 if (-not $RegistrationSecret) { Fail "REGISTRATION_SECRET is required." }
 
 # GitHub PAT
 if (-not $GithubPat) {
-    $GithubPat = Read-DefaultSecure "GitHub PAT (inventory-fleet-deploy, read-only Contents)" $_savedGithubPatEnc
+    if ($_savedGithubPatEnc -and -not $_explicitParams.Contains('GithubPat')) {
+        $GithubPat = Unprotect-Value $_savedGithubPatEnc
+    } else {
+        $GithubPat = Read-DefaultSecure "GitHub PAT (inventory-fleet-deploy, read-only Contents)" $_savedGithubPatEnc
+    }
 }
 if (-not $GithubPat) { Fail "GITHUB_PAT is required." }
-if ($GithubPat -notmatch "^ghp_") { Warn "PAT does not look like a fine-grained token (expected ghp_ prefix)" }
+if ($GithubPat -notmatch "^ghp_|^github_pat_") { Warn "PAT does not look like a GitHub token (expected ghp_ or github_pat_ prefix)" }
 Ok "GitHub PAT: provided"
 
 # Admin SSH public key
@@ -958,7 +979,11 @@ if ($AdminSshKeyPath -ne "" -and (Test-Path $AdminSshKeyPath -ErrorAction Silent
 
 # WiFi password for station.conf (may already be set from firstrun.sh step)
 if ($WifiSsid -and $WifiSecurity -ne "open" -and -not $WifiPassword) {
-    $WifiPassword = Read-DefaultSecure "WiFi password for '$WifiSsid'" $_savedWifiPwEnc
+    if ($_savedWifiPwEnc -and -not $_explicitParams.Contains('WifiPassword')) {
+        $WifiPassword = Unprotect-Value $_savedWifiPwEnc
+    } else {
+        $WifiPassword = Read-DefaultSecure "WiFi password for '$WifiSsid'" $_savedWifiPwEnc
+    }
 }
 
 # Write station.conf
