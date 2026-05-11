@@ -6,10 +6,10 @@
 #   Full mode (--image-path provided):
 #     1. Flashes the OS image via rpi-imager CLI or dd.
 #     2. Writes firstrun.sh (hostname, user, SSH, WiFi, locale).
-#     3. Writes provision.conf (deploy key, registration secret, etc.).
+#     3. Writes station.conf (deploy key, registration secret, etc.).
 #
 #   Provision-only mode (--image-path omitted):
-#     Writes provision.conf to an already-mounted boot partition.
+#     Writes station.conf to an already-mounted boot partition.
 #
 # Secrets are prompted securely unless supplied as arguments.
 # REGISTRATION_SECRET is read from server/.env automatically when present.
@@ -643,7 +643,7 @@ PYEOF
     fi
 fi
 
-# ── Step 4: provision.conf ────────────────────────────────────────────────────
+# ── Step 4: station.conf ────────────────────────────────────────────────────
 
 if [[ -z "$SERVER_URL" ]]; then
     default_url=""
@@ -712,15 +712,15 @@ if [[ -n "$WIFI_SSID" && "$WIFI_SECURITY" != "open" && -z "$WIFI_PASSWORD" ]]; t
     WIFI_PASSWORD=$(read_secure "WiFi password for '$WIFI_SSID'")
 fi
 
-out_file="$BOOT_MOUNT/provision.conf"
+out_file="$BOOT_MOUNT/station.conf"
 step "Writing provision.conf to $out_file..."
 
 [[ -n "$ADMIN_SSH_KEY" ]] && admin_line="ADMIN_SSH_KEY='$ADMIN_SSH_KEY'" || admin_line="ADMIN_SSH_KEY="
 [[ -n "$WIFI_PASSWORD" ]] && wifi_pass_line="WIFI_PASSWORD='$WIFI_PASSWORD'" || wifi_pass_line="WIFI_PASSWORD="
 
 {
-    printf '# provision.conf - First-boot configuration for inventory client station\n'
-    printf '# Written %s by provision-image.sh\n' "$(date '+%Y-%m-%d %H:%M')"
+    printf '# station.conf - First-boot configuration for inventory client station\n'
+    printf '# Written %s by create-image.sh\n' "$(date '+%Y-%m-%d %H:%M')"
     printf '#\n'
     printf '# Sensitive fields are zeroed automatically after successful first boot.\n'
     printf '\n'
@@ -743,7 +743,7 @@ step "Writing provision.conf to $out_file..."
     printf 'STATIC_PREFIX=%s\n' "$STATIC_PREFIX"
     printf 'STATIC_DNS=%s\n' "$STATIC_DNS"
 } > "$out_file"
-ok "provision.conf written"
+ok "station.conf written"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 

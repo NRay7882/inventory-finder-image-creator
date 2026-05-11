@@ -2,11 +2,11 @@
 
 SD card preparation tool for deploying inventory-finder stations on Raspberry Pi.
 
-Handles the full workflow - flash a base OS image, customise it, and write `provision.conf` to the boot partition - without opening Raspberry Pi Imager manually. Works with the private `inventory-finder` repository.
+Handles the full workflow - flash a base OS image, customise it, and write `station.conf` to the boot partition - without opening Raspberry Pi Imager manually. Works with the private `inventory-finder` repository.
 
 ## How it works
 
-The Pi image itself contains no secrets. Before inserting the SD card you place a `provision.conf` file on its FAT32 boot partition (readable from any OS without special tools). On first boot the Pi reads this file, installs your fleet deploy key, clones the inventory-finder repo, runs full provisioning, and registers with the server. Sensitive fields in `provision.conf` are zeroed automatically after a successful setup.
+The Pi image itself contains no secrets. Before inserting the SD card you place a `station.conf` file on its FAT32 boot partition (readable from any OS without special tools). On first boot the Pi reads this file, installs your fleet deploy key, clones the inventory-finder repo, runs full provisioning, and registers with the server. Sensitive fields in `station.conf` are zeroed automatically after a successful setup.
 
 **Boot sequence:**
 
@@ -41,21 +41,21 @@ Use **Raspberry Pi OS Lite (64-bit), Trixie/Debian 13** as the base image, avail
 
 ## Usage
 
-### Windows - provision-image.ps1
+### Windows - create-image.ps1
 
 Must be run as Administrator (rpi-imager requires elevation to write to a disk).
 
-**Full mode** - flash, customise, and write provision.conf:
+**Full mode** - flash, customise, and write station.conf:
 ```powershell
-.\provision-image.ps1 -ImagePath "C:\images\raspios-trixie-arm64-lite.img.xz" -WifiSsid "IoTLAN-5G"
+.\create-image.ps1 -ImagePath "C:\images\raspios-trixie-arm64-lite.img.xz" -WifiSsid "IoTLAN-5G"
 ```
 
-**Provision-only** - write provision.conf to an already-flashed card:
+**Provision-only** - write station.conf to an already-flashed card:
 ```powershell
-.\provision-image.ps1 -WifiSsid "IoTLAN-5G"
+.\create-image.ps1 -WifiSsid "IoTLAN-5G"
 ```
 
-Run `Get-Help .\provision-image.ps1 -Full` for all parameters.
+Run `Get-Help .\create-image.ps1 -Full` for all parameters.
 
 **Key parameters:**
 
@@ -73,23 +73,23 @@ Run `Get-Help .\provision-image.ps1 -Full` for all parameters.
 
 ---
 
-### Mac/Linux - provision-image.sh
+### Mac/Linux - create-image.sh
 
 **Full mode:**
 ```bash
-./provision-image.sh --image-path ~/Downloads/raspios-trixie-arm64-lite.img.xz --wifi-ssid "IoTLAN-5G"
+./create-image.sh --image-path ~/Downloads/raspios-trixie-arm64-lite.img.xz --wifi-ssid "IoTLAN-5G"
 ```
 
 The script auto-detects the SD card from removable block devices and asks for confirmation before erasing. After flashing it ejects and prompts you to re-insert.
 
 **Provision-only:**
 ```bash
-./provision-image.sh --wifi-ssid "IoTLAN-5G"
+./create-image.sh --wifi-ssid "IoTLAN-5G"
 ```
 
 The boot partition is auto-detected by looking for a FAT volume containing `cmdline.txt`. Pass `--boot-mount PATH` to override.
 
-Run `./provision-image.sh --help` for the full option list.
+Run `./create-image.sh --help` for the full option list.
 
 **Key options:**
 
@@ -108,9 +108,9 @@ Run `./provision-image.sh --help` for the full option list.
 
 ---
 
-## provision.conf
+## station.conf
 
-Written to the SD card's `bootfs` partition by both scripts. See `provision.conf.example` for the full template.
+Written to the SD card's `bootfs` partition by both scripts. See `station.conf.example` for the full template.
 
 **Required fields:**
 ```ini
@@ -121,7 +121,7 @@ DEPLOY_KEY_B64=<base64-encoded private deploy key>
 
 The scripts read `REGISTRATION_SECRET` from `server/.env` automatically if the inventory-finder repo is cloned alongside this one (i.e. at `../inventory-finder/server/.env`). Otherwise they prompt securely.
 
-To encode the deploy key manually if creating `provision.conf` by hand:
+To encode the deploy key manually if creating `station.conf` by hand:
 ```bash
 # Mac/Linux
 base64 -w 0 ~/.ssh/inventory_deploy
@@ -137,7 +137,7 @@ base64 -w 0 ~/.ssh/inventory_deploy
 GITHUB_REPO="git@github.com:YourOrg/inventory-finder.git"
 ```
 
-If you fork `inventory-finder`, update this URL in `first_boot.sh` to point to your fork before preparing images. The deploy key you supply in `provision.conf` must have read access to this repository.
+If you fork `inventory-finder`, update this URL in `first_boot.sh` to point to your fork before preparing images. The deploy key you supply in `station.conf` must have read access to this repository.
 
 ## Testing
 
@@ -153,9 +153,9 @@ uv run --group test pytest -v
 
 | File | Purpose |
 |------|---------|
-| `provision-image.ps1` | Windows: flash SD card and write provision.conf |
-| `provision-image.sh` | Mac/Linux: flash SD card and write provision.conf |
+| `create-image.ps1` | Windows: flash SD card and write station.conf |
+| `create-image.sh` | Mac/Linux: flash SD card and write station.conf |
 | `first_boot.sh` | First-boot script written to the boot partition during image prep |
-| `provision.conf.example` | Template for the boot-partition config file |
+| `station.conf.example` | Template for the boot-partition config file |
 | `setup.ps1` | Windows: check and install prerequisites |
 | `setup.sh` | Mac/Linux: check and install prerequisites |

@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Prepares a Raspberry Pi SD card: optionally flashes the OS image,
-    writes firstrun.sh for OS customisation, and writes provision.conf -
+    writes firstrun.sh for OS customisation, and writes station.conf -
     without opening Raspberry Pi Imager.
 
 .DESCRIPTION
@@ -114,7 +114,7 @@ param(
     # OS locale
     [string]$Locale = "en_US.UTF-8",
 
-    # provision.conf
+    # station.conf
     [string]$ServerUrl,
     [string]$RegistrationSecret,
     [string]$DeployKeyPath   = "$env:USERPROFILE\.ssh\inventory_deploy",
@@ -610,7 +610,7 @@ exit 0
     }
 }
 
-# ── Step 4: provision.conf ────────────────────────────────────────────────────
+# ── Step 4: station.conf ────────────────────────────────────────────────────
 
 # Server URL - try server/.env first, then fall back to local machine IP
 if (-not $ServerUrl) {
@@ -680,21 +680,21 @@ if ($AdminSshKeyPath -ne "" -and (Test-Path $AdminSshKeyPath -ErrorAction Silent
     Warn "Admin SSH key not found: $AdminSshKeyPath - password auth remains active"
 }
 
-# WiFi password for provision.conf (may already be set from firstrun.sh step)
+# WiFi password for station.conf (may already be set from firstrun.sh step)
 if ($WifiSsid -and $WifiSecurity -ne "open" -and -not $WifiPassword) {
     $WifiPassword = Read-Secure "WiFi password for '$WifiSsid'"
 }
 
-# Write provision.conf
-$outFile      = Join-Path $bootPath "provision.conf"
+# Write station.conf
+$outFile      = Join-Path $bootPath "station.conf"
 $adminLine    = if ($adminSshKey)  { "ADMIN_SSH_KEY='$adminSshKey'" }  else { "ADMIN_SSH_KEY=" }
 $wifiPassLine = if ($WifiPassword) { "WIFI_PASSWORD='$WifiPassword'" } else { "WIFI_PASSWORD=" }
 
-Step "Writing provision.conf to $outFile..."
+Step "Writing station.conf to $outFile..."
 
 $conf = @"
-# provision.conf - First-boot configuration for inventory client station
-# Written $(Get-Date -Format "yyyy-MM-dd HH:mm") by provision-image.ps1
+# station.conf - First-boot configuration for inventory client station
+# Written by create-image.ps1
 #
 # Sensitive fields are zeroed automatically after successful first boot.
 
@@ -719,7 +719,7 @@ STATIC_DNS=$StaticDns
 "@
 
 [IO.File]::WriteAllText($outFile, $conf.Replace("`r`n", "`n"), [Text.UTF8Encoding]::new($false))
-Ok "provision.conf written"
+Ok "station.conf written"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 

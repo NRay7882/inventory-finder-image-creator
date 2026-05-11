@@ -3,7 +3,7 @@
 # first_boot.sh - First-Boot Setup for Inventory Client Stations
 #
 # Runs exactly once on a freshly flashed Pi via inventory-setup.service.
-# Reads secrets from /boot/firmware/provision.conf, installs the fleet
+# Reads secrets from /boot/firmware/station.conf, installs the fleet
 # deploy key, clones the repo, runs full provisioning, and registers
 # with the server. On success, zeroes sensitive fields and removes the
 # first-boot flag so the service never runs again.
@@ -27,7 +27,7 @@ set -uo pipefail
 # =====================================================================
 
 FLAG_FILE="/etc/inventory/first-boot-pending"
-PROVISION_CONF="/boot/firmware/provision.conf"
+STATION_CONF="/boot/firmware/station.conf"
 # When run via `sudo bash`, $SUDO_USER is the invoking user (rpi5).
 # When run by systemd with User=rpi5, $USER is rpi5. Fall back to rpi5.
 # PI_USER is injected by inventory-setup.service via Environment=PI_USER=.
@@ -113,20 +113,20 @@ log -e "  ${GRAY}User: ${PI_USER} | Host: $(hostname)${NC}"
 log -e "  ${GRAY}Log: ${LOG_FILE}${NC}"
 
 # =====================================================================
-# STEP 1: Read provision.conf
+# STEP 1: Read station.conf
 # =====================================================================
 
 log ""
-log -e "${CYAN}[1/7] Reading provision.conf${NC}"
+log -e "${CYAN}[1/7] Reading station.conf${NC}"
 
-if [ ! -f "$PROVISION_CONF" ]; then
-    abort "provision.conf not found at ${PROVISION_CONF}. Place it on the boot partition before first boot."
+if [ ! -f "$STATION_CONF" ]; then
+    abort "station.conf not found at ${STATION_CONF}. Place station.conf on the boot partition before first boot."
 fi
 
 # Source the config (simple KEY=VALUE format)
 set -a
 # shellcheck source=/dev/null
-source "$PROVISION_CONF"
+source "$STATION_CONF"
 set +a
 
 REGISTRATION_SECRET="${REGISTRATION_SECRET:-}"
@@ -140,7 +140,7 @@ missing=()
 [ -z "$DEPLOY_KEY_B64" ]      && missing+=("DEPLOY_KEY_B64")
 
 if [ ${#missing[@]} -gt 0 ]; then
-    fail "Missing required fields in provision.conf:"
+    fail "Missing required fields in station.conf:"
     for field in "${missing[@]}"; do
         fail "  ${field}"
     done
@@ -152,7 +152,7 @@ info "Server: ${SERVER_URL}"
 if [ -n "$ADMIN_SSH_KEY" ]; then
     info "Admin SSH key provided - will configure authorized_keys"
 else
-    warn "No ADMIN_SSH_KEY in provision.conf - password auth will remain active"
+    warn "No ADMIN_SSH_KEY in station.conf - password auth will remain active"
 fi
 
 # =====================================================================
@@ -276,7 +276,7 @@ if [ -n "$WIFI_SSID" ]; then
         warn "No connectivity after 60s - continuing anyway"
     fi
 else
-    info "No WIFI_SSID in provision.conf - assuming Ethernet"
+    info "No WIFI_SSID in station.conf - assuming Ethernet"
 
     # Apply static IP to Ethernet if requested
     if [ -n "$STATIC_IP" ] && [ -n "$STATIC_GATEWAY" ]; then
@@ -503,13 +503,13 @@ fix_owner "${CLIENT_DIR}/.env" "${PI_HOME}/.ssh"
 log ""
 log -e "${CYAN}[7/7] Cleanup${NC}"
 
-# Zero sensitive fields in provision.conf (leave SERVER_URL as a record)
-info "Zeroing sensitive fields in provision.conf..."
-sudo sed -i 's/^REGISTRATION_SECRET=.*/REGISTRATION_SECRET=/' "$PROVISION_CONF"
-sudo sed -i 's/^DEPLOY_KEY_B64=.*/DEPLOY_KEY_B64=/' "$PROVISION_CONF"
-sudo sed -i 's/^WIFI_PASSWORD=.*/WIFI_PASSWORD=/' "$PROVISION_CONF"
-sudo sed -i 's/^STATIC_DNS=.*/STATIC_DNS=/' "$PROVISION_CONF"
-ok "Sensitive fields zeroed in provision.conf"
+# Zero sensitive fields in station.conf (leave SERVER_URL as a record)
+info "Zeroing sensitive fields in station.conf..."
+sudo sed -i 's/^REGISTRATION_SECRET=.*/REGISTRATION_SECRET=/' "$STATION_CONF"
+sudo sed -i 's/^DEPLOY_KEY_B64=.*/DEPLOY_KEY_B64=/' "$STATION_CONF"
+sudo sed -i 's/^WIFI_PASSWORD=.*/WIFI_PASSWORD=/' "$STATION_CONF"
+sudo sed -i 's/^STATIC_DNS=.*/STATIC_DNS=/' "$STATION_CONF"
+ok "Sensitive fields zeroed in station.conf"
 
 # Remove the first-boot flag file
 sudo rm -f "$FLAG_FILE"

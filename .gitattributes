@@ -1,7 +1,7 @@
 # Force LF line endings for all shell scripts (they run on Linux)
 *.sh text eol=lf
 *.bash text eol=lf
-provision.conf text eol=lf
+station.conf text eol=lf
 
 # Keep Windows scripts with CRLF
 *.ps1 text eol=crlf

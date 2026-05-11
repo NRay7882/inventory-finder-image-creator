@@ -45,5 +45,5 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 
-# Provisioning config
-provision.conf
+# Station config (written to SD card boot partition - may contain secrets)
+station.conf
