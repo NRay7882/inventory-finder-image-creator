@@ -205,6 +205,130 @@ function Wait-BootPartition {
     return $null
 }
 
+# ── USB disk classification ───────────────────────────────────────────────────
+
+# VIDs of chipmakers whose USB mass storage products are almost exclusively card readers.
+# Tested against: Genesys Logic GL3310 (VID 05E3, PID 0751) confirmed on this machine.
+$script:CardReaderVids = [System.Collections.Generic.HashSet[string]]([string[]]@(
+    '05E3',  # Genesys Logic  - most common card reader controller
+    '0BDA',  # Realtek        - card readers (also audio/ethernet, but not as mass storage)
+    '058F',  # Alcor Micro    - card readers
+    '0CF2',  # ENE Technology - card readers
+    '14CD',  # Super Top      - card readers
+    '0C4B',  # Reachi         - card readers
+    '1A40',  # TERMINUS Technology
+    '04E6',  # SCM Microsystems - smart card / card readers
+    '0D7D',  # Arkmicro       - card readers
+    '1908'   # GEMBIRD        - card readers
+))
+
+# VIDs of consumer storage brands that produce thumb drives.
+# A device with one of these VIDs and a product string that does NOT look like
+# a card reader is treated as a thumb drive.
+$script:ThumbDriveVids = [System.Collections.Generic.HashSet[string]]([string[]]@(
+    '0781',  # SanDisk
+    '0951',  # Kingston Technology
+    '8564',  # Transcend (JetFlash)
+    '18A5',  # Verbatim
+    '05DC',  # Lexar Media
+    '13FE',  # Phison Electronics (OEM in many branded drives)
+    '1F75',  # Innostor Technology
+    '048D',  # Integrated Technology Express
+    '1307'   # USBest Technology
+))
+
+function Get-DiskVidPid {
+    # Walks HKLM\...\Enum\USB to find the USB device whose ContainerID matches
+    # the disk's ContainerID, then returns its VID and PID.
+    param([string]$DiskPnpId)
+    $regDisk = "HKLM:\SYSTEM\CurrentControlSet\Enum\$DiskPnpId"
+    $containerId = (Get-ItemProperty -Path $regDisk -Name 'ContainerID' -ErrorAction SilentlyContinue).ContainerID
+    if (-not $containerId) { return $null }
+
+    $usbRoot = 'HKLM:\SYSTEM\CurrentControlSet\Enum\USB'
+    foreach ($vidPidKey in Get-ChildItem $usbRoot -ErrorAction SilentlyContinue) {
+        foreach ($instanceKey in Get-ChildItem $vidPidKey.PSPath -ErrorAction SilentlyContinue) {
+            $cid = (Get-ItemProperty -Path $instanceKey.PSPath -Name 'ContainerID' -ErrorAction SilentlyContinue).ContainerID
+            if ($cid -eq $containerId -and $vidPidKey.PSChildName -match 'VID_([0-9A-Fa-f]+)&PID_([0-9A-Fa-f]+)') {
+                return @{ VID = $Matches[1].ToUpper(); PID = $Matches[2].ToUpper() }
+            }
+        }
+    }
+    return $null
+}
+
+function Get-DiskUsbDetail {
+    # Returns classification info for a USB disk. IsCardReader / IsThumbDrive are
+    # set based on: (1) USB VID via ContainerID registry walk, and (2) the USBSTOR
+    # vendor/product strings. VID takes precedence; product strings are a fallback.
+    param([int]$Number)
+    $result = [PSCustomObject]@{
+        Vendor       = ""
+        Product      = ""
+        Vid          = ""
+        IsCardReader = $false
+        IsThumbDrive = $false
+        SizeWarning  = ""
+    }
+    try {
+        $wmi = Get-CimInstance Win32_DiskDrive -Filter "Index=$Number" -ErrorAction Stop
+        if ($wmi.PNPDeviceID -match 'VEN_([^&\\]+)')  { $result.Vendor  = ($Matches[1] -replace '_',' ').Trim() }
+        if ($wmi.PNPDeviceID -match 'PROD_([^&\\]+)') { $result.Product = ($Matches[1] -replace '_',' ').Trim() }
+        if ($wmi.Size -gt 0) {
+            $sizeGb = $wmi.Size / 1GB
+            if ($sizeGb -lt 4)   { $result.SizeWarning = "only $([Math]::Round($sizeGb,1)) GB - may be too small for Pi OS" }
+            if ($sizeGb -gt 512) { $result.SizeWarning = "$([Math]::Round($sizeGb,0)) GB - unusually large for an SD card" }
+        }
+
+        # Primary signal: USB VID from ContainerID registry walk (~50 ms)
+        $vidPid = Get-DiskVidPid -DiskPnpId $wmi.PNPDeviceID
+        if ($vidPid) {
+            $result.Vid = $vidPid.VID
+            if ($script:CardReaderVids.Contains($vidPid.VID)) {
+                $result.IsCardReader = $true
+                return $result
+            }
+        }
+    } catch {}
+
+    # Fallback: classify by USBSTOR vendor/product string
+    $upper = "$($result.Vendor) $($result.Product)".ToUpper()
+
+    if ($upper -match 'CRW|CARD.READER|SD.CARD|SDHC|SDXC|SDUC|MULTI.?CARD|CF.CARD|MASSSTORAGE') {
+        $result.IsCardReader = $true
+        return $result
+    }
+
+    # Thumb drive indicators from product string
+    $thumbPatterns = @(
+        'DATATRAVELER', 'JETFLASH', 'CRUZER', 'JUMPDRIVE', 'JUMP.DRIVE',
+        'FLASH.VOYAGER', 'ULTRA.USB', 'ULTRA.FIT', 'ULTRA.FLAIR', 'ULTRA.DUAL',
+        'USB.FLASH', 'FLASH.DRIVE',
+        '\d\.\d\s*GEN\d'   # USB spec version as product name - thumb drive signature
+    )
+    foreach ($p in $thumbPatterns) {
+        if ($upper -match $p) { $result.IsThumbDrive = $true; return $result }
+    }
+
+    # VID from a known thumb drive brand (and product string gave no counter-signal)
+    if ($result.Vid -and $script:ThumbDriveVids.Contains($result.Vid)) {
+        $result.IsThumbDrive = $true
+    }
+
+    return $result
+}
+
+function Format-DiskLine {
+    param($DiskObj, $Detail)
+    $sizeStr = if ($DiskObj.Size -gt 0) { "$([Math]::Round($DiskObj.Size/1GB,1)) GB" } else { "? GB" }
+    $vidStr  = if ($Detail.Vid)     { " VID:$($Detail.Vid)" } else { "" }
+    $prodStr = if ($Detail.Product) { " $($Detail.Vendor) $($Detail.Product)" } else { "" }
+    $tag = if ($Detail.IsCardReader)  { " [SD adapter]" }
+           elseif ($Detail.IsThumbDrive) { " [!] thumb drive" }
+           else                          { " [unclassified]" }
+    return "Disk $($DiskObj.Number): $($DiskObj.FriendlyName)$prodStr$vidStr - $sizeStr$tag"
+}
+
 # ── Saved defaults (persisted across runs via DPAPI-encrypted JSON) ───────────
 
 $script:ConfigPath = Join-Path $PSScriptRoot ".create-image.defaults.json"
@@ -353,25 +477,49 @@ if ($fullMode) {
         if ($removable.Count -eq 0) {
             Fail "No removable USB disk found. Insert the SD card and try again."
         }
+
+        Step "Classifying USB devices..."
+        $candidates = @($removable | ForEach-Object {
+            [PSCustomObject]@{ Disk = $_; Detail = (Get-DiskUsbDetail -Number $_.Number) }
+        })
+
         if ($removable.Count -gt 1) {
-            Warn "Multiple removable disks found:"
-            $removable | ForEach-Object {
-                Write-Host "  Disk $($_.Number): $($_.FriendlyName) ($([Math]::Round($_.Size/1GB,1)) GB)"
+            Write-Host "  Removable USB disks found:" -ForegroundColor Yellow
+            $candidates | ForEach-Object {
+                $line   = Format-DiskLine -DiskObj $_.Disk -Detail $_.Detail
+                $color  = if ($_.Detail.IsThumbDrive) { 'Yellow' } else { 'Gray' }
+                Write-Host "    $line" -ForegroundColor $color
+                if ($_.Detail.SizeWarning) { Write-Host "      Size: $($_.Detail.SizeWarning)" -ForegroundColor Yellow }
             }
-            $DiskNumber = [int](Read-Host "Enter disk number for the SD card")
+            $DiskNumber = [int](Read-Host "  Enter disk number for the SD card")
         } else {
-            $DiskNumber = $removable[0].Number
-            Ok "SD card: Disk $DiskNumber - $($removable[0].FriendlyName) ($([Math]::Round($removable[0].Size/1GB,1)) GB)"
+            # Single removable disk - refuse to auto-select if it looks like a thumb drive
+            $only = $candidates[0]
+            if ($only.Detail.IsThumbDrive) {
+                Write-Host ""
+                Warn "$($only.Disk.FriendlyName) ($([Math]::Round($only.Disk.Size/1GB,1)) GB) was detected as a USB thumb drive."
+                Warn "Remove thumb drives and insert only the SD card adapter, or pass -DiskNumber $($only.Disk.Number) to override."
+                exit 1
+            }
+            $DiskNumber = $only.Disk.Number
+            Ok "Target: $(Format-DiskLine -DiskObj $only.Disk -Detail $only.Detail)"
+            if ($only.Detail.SizeWarning) { Warn "Size: $($only.Detail.SizeWarning)" }
         }
     }
 
     $disk = Get-Disk -Number $DiskNumber
+    # Post-selection thumb drive check (covers explicit -DiskNumber overrides)
+    $diskDetail = Get-DiskUsbDetail -Number $DiskNumber
+    if ($diskDetail.IsThumbDrive) {
+        Warn "Disk $DiskNumber ($($disk.FriendlyName)) looks like a USB thumb drive - verify before proceeding."
+    }
+
     Write-Host ""
     Write-Host "  About to flash:" -ForegroundColor Yellow
     Write-Host "    Source: $(Split-Path $ImagePath -Leaf)" -ForegroundColor Yellow
-    Write-Host "    Target: Disk $DiskNumber - $($disk.FriendlyName) ($([Math]::Round($disk.Size/1GB,1)) GB)" -ForegroundColor Yellow
+    Write-Host "    Target: $(Format-DiskLine -DiskObj $disk -Detail $diskDetail)" -ForegroundColor Yellow
     Write-Host "    WARNING: ALL DATA ON THE DISK WILL BE ERASED" -ForegroundColor Red
-	Write-Host "    Popups for Windows Explorer & Insert Disk are normal & expected during this process" -ForegroundColor Red
+    Write-Host "    Popups for Windows Explorer & Insert Disk are normal & expected during this process" -ForegroundColor Red
     Write-Host ""
     if ((Read-Host "Type YES to continue") -ne "YES") { Write-Host "Aborted."; exit 0 }
 

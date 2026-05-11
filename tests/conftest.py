@@ -1,7 +1,9 @@
 """Shared fixtures for inventory-finder-image-creator tests."""
 
 import sys
+
 import pytest
+
 
 # Bash tests require a real bash environment - skip automatically on Windows.
 def pytest_collection_modifyitems(items):

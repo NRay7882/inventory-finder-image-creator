@@ -15,8 +15,8 @@
 # If any step fails, the flag file is left in place so the service
 # retries on the next boot. Secrets are only zeroed on full success.
 #
-# This file is bundled with inventory-finder-image-creator and also kept at
-# client/scripts/first_boot.sh in the private inventory-finder repo.
+# This file is bundled with inventory-finder-image-creator. A copy is also
+# maintained in the private inventory-finder repo.
 # The image build process copies it to /opt/inventory/ on the Pi.
 # ---------------------------------------------------------------------
 

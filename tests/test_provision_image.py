@@ -67,7 +67,8 @@ class TestFirstBootSh:
     def test_bash_syntax(self):
         result = subprocess.run(
             ["bash", "-n", str(FIRST_BOOT_SH)],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0, f"first_boot.sh syntax error:\n{result.stderr}"
 
@@ -95,14 +96,16 @@ class TestProvisionImageShHelp:
     def test_help_exits_zero(self):
         result = subprocess.run(
             ["bash", str(CREATE_SH), "--help"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0
 
     def test_help_contains_key_options(self):
         result = subprocess.run(
             ["bash", str(CREATE_SH), "--help"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         for option in ("--image-path", "--boot-mount", "--server-url", "--github-pat", "--wifi-ssid"):
             assert option in result.stdout, f"--help output missing option: {option}"
@@ -110,14 +113,16 @@ class TestProvisionImageShHelp:
     def test_unknown_option_fails(self):
         result = subprocess.run(
             ["bash", str(CREATE_SH), "--no-such-option"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         assert result.returncode != 0
 
     def test_bash_syntax(self):
         result = subprocess.run(
             ["bash", "-n", str(CREATE_SH)],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0, f"create-image.sh syntax error:\n{result.stderr}"
 
@@ -128,7 +133,7 @@ class TestProvisionImageShPath:
 
     def test_first_boot_path_is_local(self):
         content = CREATE_SH.read_text()
-        assert '../scripts/first_boot.sh' not in content, (
+        assert "../scripts/first_boot.sh" not in content, (
             "create-image.sh still references ../scripts/first_boot.sh - should use $SCRIPT_DIR/first_boot.sh"
         )
 
@@ -143,24 +148,28 @@ class TestProvisionOnly:
     def test_writes_provision_conf(self, tmp_path):
         boot = tmp_path / "bootfs"
         boot.mkdir()
-        (boot / "cmdline.txt").write_text(
-            "console=serial0,115200 root=/dev/mmcblk0p2 rootfstype=ext4\n"
-        )
+        (boot / "cmdline.txt").write_text("console=serial0,115200 root=/dev/mmcblk0p2 rootfstype=ext4\n")
 
         result = subprocess.run(
             [
-                "bash", str(CREATE_SH),
-                "--boot-mount", str(boot),
-                "--server-url", "http://192.168.1.100:8000",
-                "--registration-secret", "test-secret-abc",
-                "--github-pat", "ghp_testtoken123",
-                "--admin-ssh-key", "",
+                "bash",
+                str(CREATE_SH),
+                "--boot-mount",
+                str(boot),
+                "--server-url",
+                "http://192.168.1.100:8000",
+                "--registration-secret",
+                "test-secret-abc",
+                "--github-pat",
+                "ghp_testtoken123",
+                "--admin-ssh-key",
+                "",
             ],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
-        assert result.returncode == 0, (
-            f"create-image.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
+        assert result.returncode == 0, f"create-image.sh failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         assert (boot / "station.conf").exists(), "station.conf was not written to boot mount"
 
     def test_provision_conf_contains_required_fields(self, tmp_path):
@@ -170,14 +179,22 @@ class TestProvisionOnly:
 
         subprocess.run(
             [
-                "bash", str(CREATE_SH),
-                "--boot-mount", str(boot),
-                "--server-url", "http://192.168.1.100:8000",
-                "--registration-secret", "my-test-secret",
-                "--github-pat", "ghp_testtoken123",
-                "--admin-ssh-key", "",
+                "bash",
+                str(CREATE_SH),
+                "--boot-mount",
+                str(boot),
+                "--server-url",
+                "http://192.168.1.100:8000",
+                "--registration-secret",
+                "my-test-secret",
+                "--github-pat",
+                "ghp_testtoken123",
+                "--admin-ssh-key",
+                "",
             ],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         conf_text = (boot / "station.conf").read_text()
         assert "REGISTRATION_SECRET=my-test-secret" in conf_text
@@ -187,13 +204,20 @@ class TestProvisionOnly:
     def test_nonexistent_boot_mount_fails(self, tmp_path):
         result = subprocess.run(
             [
-                "bash", str(CREATE_SH),
-                "--boot-mount", str(tmp_path / "nonexistent"),
-                "--server-url", "http://192.168.1.100:8000",
-                "--registration-secret", "test",
-                "--github-pat", "ghp_testtoken123",
+                "bash",
+                str(CREATE_SH),
+                "--boot-mount",
+                str(tmp_path / "nonexistent"),
+                "--server-url",
+                "http://192.168.1.100:8000",
+                "--registration-secret",
+                "test",
+                "--github-pat",
+                "ghp_testtoken123",
             ],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         assert result.returncode != 0
 
@@ -203,12 +227,19 @@ class TestProvisionOnly:
         (boot / "cmdline.txt").write_text("root=/dev/mmcblk0p2\n")
         result = subprocess.run(
             [
-                "bash", str(CREATE_SH),
-                "--boot-mount", str(boot),
-                "--server-url", "http://192.168.1.100:8000",
-                "--registration-secret", "test",
-                "--github-pat", "",
+                "bash",
+                str(CREATE_SH),
+                "--boot-mount",
+                str(boot),
+                "--server-url",
+                "http://192.168.1.100:8000",
+                "--registration-secret",
+                "test",
+                "--github-pat",
+                "",
             ],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         assert result.returncode != 0
