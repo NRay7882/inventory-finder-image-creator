@@ -35,6 +35,11 @@ STORE_NAME=
 # for this station. Useful for internal/test deployments. Default: false.
 SKIP_STORE_CREATE=false
 
+# OPTIONAL - Set to true to skip the printer test label during first provisioning.
+# Useful if the label printer is not yet connected or you want to verify the
+# rest of setup before printing. Default: false.
+SKIP_TEST_PRINT=false
+
 # OPTIONAL - WiFi credentials (leave blank for Ethernet-only deployments)
 WIFI_SSID=
 WIFI_PASSWORD=

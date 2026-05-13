@@ -88,6 +88,10 @@
 .PARAMETER SkipStoreCreate
     Set to $true to suppress public store page creation. Default: $false.
 
+.PARAMETER SkipTestPrint
+    Set to $true to skip the printer test label during first provisioning. Default: $false.
+    Useful when the label printer is not yet connected or you want to verify setup before printing.
+
 .PARAMETER StaticIp, StaticGateway, StaticPrefix, StaticDns
     Optional static IP. Leave blank for DHCP.
 
@@ -129,6 +133,7 @@ param(
     [string]$AdminSshKeyPath = "$env:USERPROFILE\.ssh\id_ed25519.pub",
     [string]$StoreName,
     [bool]$SkipStoreCreate = $false,
+    [bool]$SkipTestPrint   = $false,
     [string]$StaticIp,
     [string]$StaticGateway,
     [string]$StaticPrefix = "24",
@@ -423,7 +428,7 @@ $_cfg = Import-Conf
 # Apply saved non-sensitive values for any param that was not explicitly provided
 foreach ($k in @('ImagePath','Hostname','Username','Timezone','KeyboardLayout',
                   'WifiSsid','WifiCountry','WifiSecurity','WifiHidden','Locale',
-                  'ServerUrl','AdminSshKeyPath','StoreName','SkipStoreCreate',
+                  'ServerUrl','AdminSshKeyPath','StoreName','SkipStoreCreate','SkipTestPrint',
                   'StaticIp','StaticGateway','StaticPrefix','StaticDns')) {
     if (-not $_explicitParams.Contains($k)) {
         $saved = if ($_cfg.ContainsKey($k)) { $_cfg[$k] } else { $null }
@@ -1027,6 +1032,7 @@ $wifiPassLine   = if ($WifiPassword) { "WIFI_PASSWORD='$WifiPassword'" }  else {
 # Double-quote the store name so apostrophes and spaces survive bash source
 $storeNameLine  = if ($StoreName)    { "STORE_NAME=`"${StoreName}`"" }    else { "STORE_NAME=" }
 $skipStoreLine  = "SKIP_STORE_CREATE=" + ($SkipStoreCreate.ToString().ToLower())
+$skipPrintLine  = "SKIP_TEST_PRINT="   + ($SkipTestPrint.ToString().ToLower())
 
 Step "Writing station.conf to $outFile..."
 
@@ -1048,6 +1054,7 @@ $adminLine
 # If set, a store page is auto-created when the admin accepts the station.
 $storeNameLine
 $skipStoreLine
+$skipPrintLine
 
 # OPTIONAL - WiFi (leave blank for Ethernet-only)
 WIFI_SSID=$WifiSsid
@@ -1080,6 +1087,7 @@ $newCfg = [ordered]@{
     AdminSshKeyPath       = $AdminSshKeyPath
     StoreName             = $StoreName
     SkipStoreCreate       = $SkipStoreCreate
+    SkipTestPrint         = $SkipTestPrint
     StaticIp              = $StaticIp
     StaticGateway         = $StaticGateway
     StaticPrefix          = $StaticPrefix

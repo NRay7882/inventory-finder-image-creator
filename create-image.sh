@@ -77,6 +77,10 @@ REGISTRATION_SECRET=""
 GITHUB_PAT=""
 ADMIN_SSH_KEY_PATH="$HOME/.ssh/id_ed25519.pub"
 
+STORE_NAME=""
+SKIP_STORE_CREATE="false"
+SKIP_TEST_PRINT="false"
+
 STATIC_IP=""
 STATIC_GATEWAY=""
 STATIC_PREFIX="24"
@@ -109,6 +113,11 @@ Usage: ./create-image.sh [options]
   --github-pat TOKEN         GitHub PAT with read-only Contents access to inventory-finder
   --admin-ssh-key PATH       Admin SSH public key (default: ~/.ssh/id_ed25519.pub)
                              Pass "" to skip
+
+  --store-name NAME          Store display name (e.g. "Steve's Wheels and Deals")
+                             If set, a public store page is created when the admin accepts the station.
+  --skip-store-create        Suppress public store page creation (default: off)
+  --skip-test-print          Skip printer test label during first provisioning run (default: off)
 
   --static-ip IP             Static IP (omit for DHCP)
   --static-gateway GW        Default gateway
@@ -146,6 +155,9 @@ while [[ $# -gt 0 ]]; do
         --registration-secret) REGISTRATION_SECRET="$2"; shift 2 ;;
         --github-pat)          GITHUB_PAT="$2";           shift 2 ;;
         --admin-ssh-key)       ADMIN_SSH_KEY_PATH="$2";   shift 2 ;;
+        --store-name)          STORE_NAME="$2";           shift 2 ;;
+        --skip-store-create)   SKIP_STORE_CREATE="true";  shift   ;;
+        --skip-test-print)     SKIP_TEST_PRINT="true";    shift   ;;
         --static-ip)           STATIC_IP="$2";            shift 2 ;;
         --static-gateway)      STATIC_GATEWAY="$2";       shift 2 ;;
         --static-prefix)       STATIC_PREFIX="$2";        shift 2 ;;
@@ -701,6 +713,15 @@ elif [[ -n "$ADMIN_SSH_KEY_PATH" ]]; then
     warn "Admin SSH key not found: $ADMIN_SSH_KEY_PATH - password auth remains active"
 fi
 
+if [[ -z "$STORE_NAME" ]]; then
+    STORE_NAME=$(prompt_line "Store display name (optional - Enter to skip)" "")
+fi
+if [[ -n "$STORE_NAME" ]]; then
+    ok "Store name: $STORE_NAME"
+else
+    ok "Store name: (none - no public store page)"
+fi
+
 if [[ -n "$WIFI_SSID" && "$WIFI_SECURITY" != "open" && -z "$WIFI_PASSWORD" ]]; then
     WIFI_PASSWORD=$(read_secure "WiFi password for '$WIFI_SSID'")
 fi
@@ -724,6 +745,16 @@ step "Writing station.conf to $out_file..."
     printf '\n'
     printf '# OPTIONAL - Admin SSH public key (enables passwordless SSH, disables password auth)\n'
     printf '%s\n' "$admin_line"
+    printf '\n'
+    printf '# OPTIONAL - Store display name for this Pi'"'"'s public inventory page.\n'
+    printf '# If set, a store page is auto-created when the admin accepts the station.\n'
+    if [[ -n "$STORE_NAME" ]]; then
+        printf 'STORE_NAME="%s"\n' "$STORE_NAME"
+    else
+        printf 'STORE_NAME=\n'
+    fi
+    printf 'SKIP_STORE_CREATE=%s\n' "$SKIP_STORE_CREATE"
+    printf 'SKIP_TEST_PRINT=%s\n' "$SKIP_TEST_PRINT"
     printf '\n'
     printf '# OPTIONAL - WiFi (leave blank for Ethernet-only)\n'
     printf 'WIFI_SSID=%s\n' "$WIFI_SSID"

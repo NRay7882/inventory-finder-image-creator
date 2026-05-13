@@ -71,6 +71,9 @@ Run `Get-Help .\create-image.ps1 -Full` for all parameters.
 | `-ServerUrl` | *(from .env or prompt)* | Server base URL, e.g. `http://192.168.2.100:8000` |
 | `-GithubPat` | *(prompted)* | GitHub PAT with read-only Contents access to inventory-finder |
 | `-AdminSshKeyPath` | `~\.ssh\id_ed25519.pub` | Admin public key (pass `""` to skip) |
+| `-StoreName` | *(prompted, blank = none)* | Store display name, e.g. `"Steve's Wheels and Deals"` - creates a public store page when the admin accepts the station |
+| `-SkipStoreCreate` | `$false` | Suppress public store page creation (for internal/test deployments) |
+| `-SkipTestPrint` | `$false` | Skip printer test label on first provisioning run (useful before the printer is connected) |
 | `-StaticIp` | *(blank = DHCP)* | Optional static IP for the Pi |
 | `-DiskNumber` | *(auto-detected)* | Override SD card disk number from `Get-Disk` |
 
@@ -107,6 +110,9 @@ Run `./create-image.sh --help` for the full option list.
 | `--server-url URL` | *(prompted)* | Server base URL |
 | `--github-pat TOKEN` | *(prompted)* | GitHub PAT with read-only Contents access to inventory-finder |
 | `--admin-ssh-key PATH` | `~/.ssh/id_ed25519.pub` | Admin public key (pass `""` to skip) |
+| `--store-name NAME` | *(prompted, blank = none)* | Store display name - creates a public store page when the admin accepts the station |
+| `--skip-store-create` | *(off)* | Suppress public store page creation |
+| `--skip-test-print` | *(off)* | Skip printer test label on first provisioning run |
 | `--static-ip IP` | *(blank = DHCP)* | Optional static IP for the Pi |
 
 ---
@@ -125,6 +131,17 @@ GITHUB_PAT=<fine-grained PAT with read-only Contents access to inventory-finder>
 The scripts read `REGISTRATION_SECRET` from `server/.env` automatically if the inventory-finder repo is cloned alongside this one (i.e. at `../inventory-finder/server/.env`). Otherwise they prompt securely.
 
 The `GITHUB_PAT` is a GitHub fine-grained token scoped to `inventory-finder` with Contents: Read-only. It is prompted securely during image creation. See the inventory-finder server README for token creation and rotation instructions.
+
+**Optional fields:**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `ADMIN_SSH_KEY` | *(blank)* | Full contents of an SSH public key. Added to `authorized_keys`; disables password auth if set. |
+| `STORE_NAME` | *(blank)* | Display name for this station's public inventory page (e.g. `"Steve's Wheels and Deals"`). Use double quotes if the name contains spaces or an apostrophe. A store page is auto-created when the admin accepts the station. Leave blank to skip. |
+| `SKIP_STORE_CREATE` | `false` | Set to `true` to suppress public store page creation entirely. |
+| `SKIP_TEST_PRINT` | `false` | Set to `true` to skip the printer test label during first provisioning. Useful if the label printer is not yet connected, or to verify the rest of setup before printing. Can also be set in `client/.env` for subsequent re-provision runs. |
+| `WIFI_SSID` / `WIFI_PASSWORD` | *(blank)* | WiFi credentials. Leave blank for Ethernet-only deployments. |
+| `STATIC_IP` / `STATIC_GATEWAY` | *(blank)* | Static IP. Leave blank to use DHCP. |
 
 ## Customisation
 
