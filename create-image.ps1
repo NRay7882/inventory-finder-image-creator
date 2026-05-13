@@ -80,6 +80,14 @@
     Default: $env:USERPROFILE\.ssh\id_ed25519.pub
     Pass "" to skip.
 
+.PARAMETER StoreName
+    Display name for this station's public store page (e.g. "Steve's Wheels and Deals").
+    A store page is auto-created when the admin accepts the station.
+    Saved between runs. Leave blank for no public store page.
+
+.PARAMETER SkipStoreCreate
+    Set to $true to suppress public store page creation. Default: $false.
+
 .PARAMETER StaticIp, StaticGateway, StaticPrefix, StaticDns
     Optional static IP. Leave blank for DHCP.
 
@@ -119,6 +127,8 @@ param(
     [string]$RegistrationSecret,
     [string]$GithubPat,
     [string]$AdminSshKeyPath = "$env:USERPROFILE\.ssh\id_ed25519.pub",
+    [string]$StoreName,
+    [bool]$SkipStoreCreate = $false,
     [string]$StaticIp,
     [string]$StaticGateway,
     [string]$StaticPrefix = "24",
@@ -413,7 +423,8 @@ $_cfg = Import-Conf
 # Apply saved non-sensitive values for any param that was not explicitly provided
 foreach ($k in @('ImagePath','Hostname','Username','Timezone','KeyboardLayout',
                   'WifiSsid','WifiCountry','WifiSecurity','WifiHidden','Locale',
-                  'ServerUrl','AdminSshKeyPath','StaticIp','StaticGateway','StaticPrefix','StaticDns')) {
+                  'ServerUrl','AdminSshKeyPath','StoreName','SkipStoreCreate',
+                  'StaticIp','StaticGateway','StaticPrefix','StaticDns')) {
     if (-not $_explicitParams.Contains($k)) {
         $saved = if ($_cfg.ContainsKey($k)) { $_cfg[$k] } else { $null }
         if ($saved -ne $null -and $saved -ne '') {
@@ -992,6 +1003,14 @@ if ($AdminSshKeyPath -ne "" -and (Test-Path $AdminSshKeyPath -ErrorAction Silent
     Warn "Admin SSH key not found: $AdminSshKeyPath - password auth remains active"
 }
 
+# Store name (optional) - saved plaintext since it changes per deployment
+if (-not $_explicitParams.Contains('StoreName')) {
+    $prompt = if ($StoreName) { "Store display name [$StoreName]" } else { "Store display name (optional - Enter to skip)" }
+    $entered = (Read-Host $prompt).Trim()
+    if ($entered) { $StoreName = $entered }
+}
+if ($StoreName) { Ok "Store name: $StoreName" } else { Ok "Store name: (none - no public store page)" }
+
 # WiFi password for station.conf (may already be set from firstrun.sh step)
 if ($WifiSsid -and $WifiSecurity -ne "open" -and -not $WifiPassword) {
     if ($_savedWifiPwEnc -and -not $_explicitParams.Contains('WifiPassword')) {
@@ -1002,9 +1021,12 @@ if ($WifiSsid -and $WifiSecurity -ne "open" -and -not $WifiPassword) {
 }
 
 # Write station.conf
-$outFile      = Join-Path $bootPath "station.conf"
-$adminLine    = if ($adminSshKey)  { "ADMIN_SSH_KEY='$adminSshKey'" }  else { "ADMIN_SSH_KEY=" }
-$wifiPassLine = if ($WifiPassword) { "WIFI_PASSWORD='$WifiPassword'" } else { "WIFI_PASSWORD=" }
+$outFile        = Join-Path $bootPath "station.conf"
+$adminLine      = if ($adminSshKey)  { "ADMIN_SSH_KEY='$adminSshKey'" }   else { "ADMIN_SSH_KEY=" }
+$wifiPassLine   = if ($WifiPassword) { "WIFI_PASSWORD='$WifiPassword'" }  else { "WIFI_PASSWORD=" }
+# Double-quote the store name so apostrophes and spaces survive bash source
+$storeNameLine  = if ($StoreName)    { "STORE_NAME=`"${StoreName}`"" }    else { "STORE_NAME=" }
+$skipStoreLine  = "SKIP_STORE_CREATE=" + ($SkipStoreCreate.ToString().ToLower())
 
 Step "Writing station.conf to $outFile..."
 
@@ -1021,6 +1043,11 @@ GITHUB_PAT=$GithubPat
 
 # OPTIONAL - Admin SSH public key (enables passwordless SSH, disables password auth)
 $adminLine
+
+# OPTIONAL - Store display name for this Pi's public inventory page.
+# If set, a store page is auto-created when the admin accepts the station.
+$storeNameLine
+$skipStoreLine
 
 # OPTIONAL - WiFi (leave blank for Ethernet-only)
 WIFI_SSID=$WifiSsid
@@ -1051,6 +1078,8 @@ $newCfg = [ordered]@{
     Locale                = $Locale
     ServerUrl             = $ServerUrl
     AdminSshKeyPath       = $AdminSshKeyPath
+    StoreName             = $StoreName
+    SkipStoreCreate       = $SkipStoreCreate
     StaticIp              = $StaticIp
     StaticGateway         = $StaticGateway
     StaticPrefix          = $StaticPrefix

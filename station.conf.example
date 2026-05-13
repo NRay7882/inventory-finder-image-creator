@@ -20,7 +20,7 @@ SERVER_URL=
 # Create at: GitHub > Settings > Developer Settings > Personal Access Tokens > Fine-grained tokens
 GITHUB_PAT=
 
-# OPTIONAL - Admin SSH public key for passwordless login (recommended)
+# REQUIRED - Admin SSH public key for passwordless login (recommended)
 # Paste the full contents of your admin public key (e.g. ~/.ssh/id_ed25519.pub)
 # This key is added to authorized_keys and password auth is disabled afterwards.
 # Without this, password authentication remains active on the station.
