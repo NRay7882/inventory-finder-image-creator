@@ -230,12 +230,18 @@ if [ -n "$WIFI_SSID" ]; then
         # Remove any stale connection with this name
         sudo nmcli connection delete "$wifi_conn_name" 2>/dev/null || true
 
+        # Write WiFi password to a temp file so nmcli doesn't reject it in
+        # non-interactive (systemd) mode. Trap ensures cleanup on any exit.
+        wifi_passwd_file=$(mktemp)
+        trap 'rm -f "$wifi_passwd_file"' EXIT INT TERM
+        printf 'wifi-sec.psk:%s\n' "$WIFI_PASSWORD" > "$wifi_passwd_file"
+
         if [ -n "$STATIC_IP" ] && [ -n "$STATIC_GATEWAY" ]; then
             # Create connection with static IP in one shot
-            sudo nmcli connection add \
+            sudo nmcli --passwd-file "$wifi_passwd_file" connection add \
                 type wifi ifname wlan0 con-name "$wifi_conn_name" \
                 ssid "$WIFI_SSID" \
-                wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$WIFI_PASSWORD" \
+                wifi-sec.key-mgmt wpa-psk \
                 ipv4.method manual \
                 ipv4.addresses "${STATIC_IP}/${STATIC_PREFIX}" \
                 ipv4.gateway "$STATIC_GATEWAY" \
@@ -243,18 +249,17 @@ if [ -n "$WIFI_SSID" ]; then
             sudo nmcli connection up "$wifi_conn_name" 2>&1 | tee -a "$LOG_FILE" || true
             ok "WiFi connection created with static IP"
         else
-            # DHCP - use connection add + up so the password is passed as an
-            # explicit property rather than a positional argument that nmcli
-            # silently drops when the adapter isn't fully initialised.
-            sudo nmcli connection add \
+            sudo nmcli --passwd-file "$wifi_passwd_file" connection add \
                 type wifi con-name "$wifi_conn_name" \
                 ifname wlan0 ssid "$WIFI_SSID" \
                 wifi-sec.key-mgmt wpa-psk \
-                wifi-sec.psk "$WIFI_PASSWORD" \
                 ipv4.method auto 2>&1 | tee -a "$LOG_FILE" || true
             sudo nmcli connection up "$wifi_conn_name" 2>&1 | tee -a "$LOG_FILE" || true
             ok "WiFi connection created (DHCP)"
         fi
+
+        rm -f "$wifi_passwd_file"
+        trap - EXIT INT TERM
     fi
 
     # Wait for network connectivity (up to 60 seconds)
