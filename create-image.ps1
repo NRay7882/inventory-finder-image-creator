@@ -60,7 +60,7 @@
     WiFi security type: wpa2 (default) or open (no password).
 
 .PARAMETER WifiHidden
-    Set to $true if the network has a hidden SSID. Default: $false.
+    Pass this switch if the network has a hidden SSID.
 
 .PARAMETER Locale
     System locale written to /etc/locale.gen. Default: en_US.UTF-8
@@ -121,7 +121,7 @@ param(
     [string]$WifiPassword,
     [string]$WifiCountry   = "US",
     [ValidateSet("wpa2","open")][string]$WifiSecurity = "wpa2",
-    [bool]$WifiHidden      = $false,
+    [switch]$WifiHidden,
 
     # OS locale
     [string]$Locale = "en_US.UTF-8",
@@ -132,8 +132,8 @@ param(
     [string]$GithubPat,
     [string]$AdminSshKeyPath = "$env:USERPROFILE\.ssh\id_ed25519.pub",
     [string]$StoreName,
-    [bool]$SkipStoreCreate = $false,
-    [bool]$SkipTestPrint   = $false,
+    [switch]$SkipStoreCreate,
+    [switch]$SkipTestPrint,
     [string]$StaticIp,
     [string]$StaticGateway,
     [string]$StaticPrefix = "24",
@@ -433,7 +433,7 @@ foreach ($k in @('ImagePath','Hostname','Username','Timezone','KeyboardLayout',
     if (-not $_explicitParams.Contains($k)) {
         $saved = if ($_cfg.ContainsKey($k)) { $_cfg[$k] } else { $null }
         if ($saved -ne $null -and $saved -ne '') {
-            if ($k -eq 'WifiHidden') { Set-Variable -Name $k -Value ([bool]$saved) -Scope Script }
+            if ($k -in @('WifiHidden','SkipStoreCreate','SkipTestPrint')) { Set-Variable -Name $k -Value ([bool]$saved) -Scope Script }
             else                     { Set-Variable -Name $k -Value ([string]$saved) -Scope Script }
         }
     }
@@ -1081,13 +1081,13 @@ $newCfg = [ordered]@{
     WifiSsid              = $WifiSsid
     WifiCountry           = $WifiCountry
     WifiSecurity          = $WifiSecurity
-    WifiHidden            = $WifiHidden
+    WifiHidden            = [bool]$WifiHidden
     Locale                = $Locale
     ServerUrl             = $ServerUrl
     AdminSshKeyPath       = $AdminSshKeyPath
     StoreName             = $StoreName
-    SkipStoreCreate       = $SkipStoreCreate
-    SkipTestPrint         = $SkipTestPrint
+    SkipStoreCreate       = [bool]$SkipStoreCreate
+    SkipTestPrint         = [bool]$SkipTestPrint
     StaticIp              = $StaticIp
     StaticGateway         = $StaticGateway
     StaticPrefix          = $StaticPrefix
