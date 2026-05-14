@@ -136,32 +136,33 @@ EOF
     exit 0
 }
 
+_explicit=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --image-path)          IMAGE_PATH="$2";           shift 2 ;;
-        --disk)                DISK_DEVICE="$2";          shift 2 ;;
-        --boot-mount)          BOOT_MOUNT="$2";           shift 2 ;;
-        --hostname)            PI_HOSTNAME="$2";          shift 2 ;;
-        --username)            PI_USERNAME="$2";          shift 2 ;;
-        --timezone)            TIMEZONE="$2";             shift 2 ;;
-        --keyboard)            KEYBOARD_LAYOUT="$2";      shift 2 ;;
-        --locale)              LOCALE="$2";               shift 2 ;;
-        --wifi-ssid)           WIFI_SSID="$2";            shift 2 ;;
-        --wifi-password)       WIFI_PASSWORD="$2";        shift 2 ;;
-        --wifi-country)        WIFI_COUNTRY="$2";         shift 2 ;;
-        --wifi-security)       WIFI_SECURITY="$2";        shift 2 ;;
-        --wifi-hidden)         WIFI_HIDDEN="true";        shift   ;;
-        --server-url)          SERVER_URL="$2";           shift 2 ;;
-        --registration-secret) REGISTRATION_SECRET="$2"; shift 2 ;;
-        --github-pat)          GITHUB_PAT="$2";           shift 2 ;;
-        --admin-ssh-key)       ADMIN_SSH_KEY_PATH="$2";   shift 2 ;;
-        --store-name)          STORE_NAME="$2";           shift 2 ;;
-        --skip-store-create)   SKIP_STORE_CREATE="true";  shift   ;;
-        --skip-test-print)     SKIP_TEST_PRINT="true";    shift   ;;
-        --static-ip)           STATIC_IP="$2";            shift 2 ;;
-        --static-gateway)      STATIC_GATEWAY="$2";       shift 2 ;;
-        --static-prefix)       STATIC_PREFIX="$2";        shift 2 ;;
-        --static-dns)          STATIC_DNS="$2";           shift 2 ;;
+        --image-path)          IMAGE_PATH="$2";                                    shift 2 ;;
+        --disk)                DISK_DEVICE="$2";                                   shift 2 ;;
+        --boot-mount)          BOOT_MOUNT="$2";                                    shift 2 ;;
+        --hostname)            PI_HOSTNAME="$2";   _explicit+=(Hostname);          shift 2 ;;
+        --username)            PI_USERNAME="$2";   _explicit+=(Username);          shift 2 ;;
+        --timezone)            TIMEZONE="$2";      _explicit+=(Timezone);          shift 2 ;;
+        --keyboard)            KEYBOARD_LAYOUT="$2"; _explicit+=(KeyboardLayout);  shift 2 ;;
+        --locale)              LOCALE="$2";        _explicit+=(Locale);            shift 2 ;;
+        --wifi-ssid)           WIFI_SSID="$2";     _explicit+=(WifiSsid);          shift 2 ;;
+        --wifi-password)       WIFI_PASSWORD="$2";                                 shift 2 ;;
+        --wifi-country)        WIFI_COUNTRY="$2";  _explicit+=(WifiCountry);       shift 2 ;;
+        --wifi-security)       WIFI_SECURITY="$2"; _explicit+=(WifiSecurity);      shift 2 ;;
+        --wifi-hidden)         WIFI_HIDDEN="true"; _explicit+=(WifiHidden);        shift   ;;
+        --server-url)          SERVER_URL="$2";    _explicit+=(ServerUrl);         shift 2 ;;
+        --registration-secret) REGISTRATION_SECRET="$2";                           shift 2 ;;
+        --github-pat)          GITHUB_PAT="$2";                                    shift 2 ;;
+        --admin-ssh-key)       ADMIN_SSH_KEY_PATH="$2"; _explicit+=(AdminSshKeyPath); shift 2 ;;
+        --store-name)          STORE_NAME="$2";    _explicit+=(StoreName);         shift 2 ;;
+        --skip-store-create)   SKIP_STORE_CREATE="true"; _explicit+=(SkipStoreCreate); shift ;;
+        --skip-test-print)     SKIP_TEST_PRINT="true"; _explicit+=(SkipTestPrint); shift   ;;
+        --static-ip)           STATIC_IP="$2";     _explicit+=(StaticIp);          shift 2 ;;
+        --static-gateway)      STATIC_GATEWAY="$2"; _explicit+=(StaticGateway);   shift 2 ;;
+        --static-prefix)       STATIC_PREFIX="$2"; _explicit+=(StaticPrefix);      shift 2 ;;
+        --static-dns)          STATIC_DNS="$2";    _explicit+=(StaticDns);         shift 2 ;;
         --help|-h)             usage ;;
         *) fail "Unknown option: $1. Run with --help for usage." ;;
     esac
@@ -171,6 +172,42 @@ OS_TYPE="$(uname -s)"  # Darwin or Linux
 FULL_MODE=false
 [[ -n "$IMAGE_PATH" ]] && FULL_MODE=true
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# ── Saved defaults ────────────────────────────────────────────────────────────
+
+DEFAULTS_FILE="$SCRIPT_DIR/.create-image.defaults.json"
+
+_was_explicit() { local k="$1"; [[ " ${_explicit[*]} " == *" $k "* ]]; }
+
+_load_saved() {
+    local key="$1" fallback="${2:-}"
+    local val
+    val=$(DEFAULTS_FILE_PATH="$DEFAULTS_FILE" LOOKUP_KEY="$key" \
+        python3 -c "import json,os; d=json.load(open(os.environ['DEFAULTS_FILE_PATH'])); print(d.get(os.environ['LOOKUP_KEY'],''))" \
+        2>/dev/null) || true
+    printf '%s' "${val:-$fallback}"
+}
+
+if [[ -f "$DEFAULTS_FILE" ]] && command -v python3 &>/dev/null; then
+    _was_explicit Hostname       || PI_HOSTNAME=$(_load_saved Hostname "$PI_HOSTNAME")
+    _was_explicit Username       || PI_USERNAME=$(_load_saved Username "$PI_USERNAME")
+    _was_explicit Timezone       || TIMEZONE=$(_load_saved Timezone "$TIMEZONE")
+    _was_explicit KeyboardLayout || KEYBOARD_LAYOUT=$(_load_saved KeyboardLayout "$KEYBOARD_LAYOUT")
+    _was_explicit Locale         || LOCALE=$(_load_saved Locale "$LOCALE")
+    _was_explicit WifiSsid       || WIFI_SSID=$(_load_saved WifiSsid "$WIFI_SSID")
+    _was_explicit WifiCountry    || WIFI_COUNTRY=$(_load_saved WifiCountry "$WIFI_COUNTRY")
+    _was_explicit WifiSecurity   || WIFI_SECURITY=$(_load_saved WifiSecurity "$WIFI_SECURITY")
+    _was_explicit WifiHidden     || WIFI_HIDDEN=$(_load_saved WifiHidden "$WIFI_HIDDEN")
+    _was_explicit ServerUrl      || SERVER_URL=$(_load_saved ServerUrl "$SERVER_URL")
+    _was_explicit AdminSshKeyPath || ADMIN_SSH_KEY_PATH=$(_load_saved AdminSshKeyPath "$ADMIN_SSH_KEY_PATH")
+    _was_explicit StoreName      || STORE_NAME=$(_load_saved StoreName "$STORE_NAME")
+    _was_explicit SkipStoreCreate || SKIP_STORE_CREATE=$(_load_saved SkipStoreCreate "$SKIP_STORE_CREATE")
+    _was_explicit SkipTestPrint  || SKIP_TEST_PRINT=$(_load_saved SkipTestPrint "$SKIP_TEST_PRINT")
+    _was_explicit StaticIp       || STATIC_IP=$(_load_saved StaticIp "$STATIC_IP")
+    _was_explicit StaticGateway  || STATIC_GATEWAY=$(_load_saved StaticGateway "$STATIC_GATEWAY")
+    _was_explicit StaticPrefix   || STATIC_PREFIX=$(_load_saved StaticPrefix "$STATIC_PREFIX")
+    _was_explicit StaticDns      || STATIC_DNS=$(_load_saved StaticDns "$STATIC_DNS")
+fi
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
@@ -768,6 +805,55 @@ step "Writing station.conf to $out_file..."
     printf 'STATIC_DNS=%s\n' "$STATIC_DNS"
 } > "$out_file"
 ok "station.conf written"
+
+# ── Save defaults ─────────────────────────────────────────────────────────────
+
+if command -v python3 &>/dev/null; then
+    export _D_HOSTNAME="$PI_HOSTNAME" _D_USERNAME="$PI_USERNAME" \
+           _D_TIMEZONE="$TIMEZONE" _D_KEYBOARD="$KEYBOARD_LAYOUT" \
+           _D_LOCALE="$LOCALE" _D_WIFI_SSID="$WIFI_SSID" \
+           _D_WIFI_COUNTRY="$WIFI_COUNTRY" _D_WIFI_SECURITY="$WIFI_SECURITY" \
+           _D_WIFI_HIDDEN="$WIFI_HIDDEN" _D_SERVER_URL="$SERVER_URL" \
+           _D_ADMIN_SSH_KEY_PATH="$ADMIN_SSH_KEY_PATH" _D_STORE_NAME="$STORE_NAME" \
+           _D_SKIP_STORE_CREATE="$SKIP_STORE_CREATE" _D_SKIP_TEST_PRINT="$SKIP_TEST_PRINT" \
+           _D_STATIC_IP="$STATIC_IP" _D_STATIC_GATEWAY="$STATIC_GATEWAY" \
+           _D_STATIC_PREFIX="$STATIC_PREFIX" _D_STATIC_DNS="$STATIC_DNS" \
+           _D_FILE="$DEFAULTS_FILE"
+    python3 - <<'PYEOF'
+import json, os
+mapping = {
+    "Hostname":        "_D_HOSTNAME",
+    "Username":        "_D_USERNAME",
+    "Timezone":        "_D_TIMEZONE",
+    "KeyboardLayout":  "_D_KEYBOARD",
+    "Locale":          "_D_LOCALE",
+    "WifiSsid":        "_D_WIFI_SSID",
+    "WifiCountry":     "_D_WIFI_COUNTRY",
+    "WifiSecurity":    "_D_WIFI_SECURITY",
+    "WifiHidden":      "_D_WIFI_HIDDEN",
+    "ServerUrl":       "_D_SERVER_URL",
+    "AdminSshKeyPath": "_D_ADMIN_SSH_KEY_PATH",
+    "StoreName":       "_D_STORE_NAME",
+    "SkipStoreCreate": "_D_SKIP_STORE_CREATE",
+    "SkipTestPrint":   "_D_SKIP_TEST_PRINT",
+    "StaticIp":        "_D_STATIC_IP",
+    "StaticGateway":   "_D_STATIC_GATEWAY",
+    "StaticPrefix":    "_D_STATIC_PREFIX",
+    "StaticDns":       "_D_STATIC_DNS",
+}
+dest = os.environ.get("_D_FILE", "")
+try:
+    with open(dest) as f:
+        existing = json.load(f)
+except Exception:
+    existing = {}
+for k, env_k in mapping.items():
+    existing[k] = os.environ.get(env_k, "")
+with open(dest, "w") as f:
+    json.dump(existing, f, indent=2)
+PYEOF
+    ok "Defaults saved"
+fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 

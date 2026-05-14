@@ -1008,10 +1008,9 @@ if ($AdminSshKeyPath -ne "" -and (Test-Path $AdminSshKeyPath -ErrorAction Silent
     Warn "Admin SSH key not found: $AdminSshKeyPath - password auth remains active"
 }
 
-# Store name (optional) - saved plaintext since it changes per deployment
-if (-not $_explicitParams.Contains('StoreName')) {
-    $prompt = if ($StoreName) { "Store display name [$StoreName]" } else { "Store display name (optional - Enter to skip)" }
-    $entered = (Read-Host $prompt).Trim()
+# Store name (optional) - prompt only when no saved value and not passed explicitly
+if (-not $_explicitParams.Contains('StoreName') -and -not $StoreName) {
+    $entered = (Read-Host "Store display name (optional - Enter to skip)").Trim()
     if ($entered) { $StoreName = $entered }
 }
 if ($StoreName) { Ok "Store name: $StoreName" } else { Ok "Store name: (none - no public store page)" }

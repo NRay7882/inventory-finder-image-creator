@@ -71,7 +71,7 @@ Run `Get-Help .\create-image.ps1 -Full` for all parameters.
 | `-ServerUrl` | *(from .env or prompt)* | Server base URL, e.g. `http://192.168.2.100:8000` |
 | `-GithubPat` | *(prompted)* | GitHub PAT with read-only Contents access to inventory-finder |
 | `-AdminSshKeyPath` | `~\.ssh\id_ed25519.pub` | Admin public key (pass `""` to skip) |
-| `-StoreName` | *(prompted, blank = none)* | Store display name, e.g. `"Steve's Wheels and Deals"` - creates a public store page when the admin accepts the station |
+| `-StoreName` | *(saved or blank = none)* | Store display name, e.g. `"Steve's Wheels and Deals"` - creates a public store page when the admin accepts the station. Saved between runs; pass `""` to clear. |
 | `-SkipStoreCreate` | `$false` | Suppress public store page creation (for internal/test deployments) |
 | `-SkipTestPrint` | `$false` | Skip printer test label on first provisioning run (useful before the printer is connected) |
 | `-StaticIp` | *(blank = DHCP)* | Optional static IP for the Pi |
@@ -97,6 +97,8 @@ The boot partition is auto-detected by looking for a FAT volume containing `cmdl
 
 Run `./create-image.sh --help` for the full option list.
 
+**Saved defaults:** After each successful run the script saves all settings to `.create-image.defaults.json` (gitignored, shared with `create-image.ps1`). On the next run, non-sensitive values are restored automatically. Pass any option explicitly to override and update the saved value.
+
 **Key options:**
 
 | Option | Default | Description |
@@ -110,7 +112,7 @@ Run `./create-image.sh --help` for the full option list.
 | `--server-url URL` | *(prompted)* | Server base URL |
 | `--github-pat TOKEN` | *(prompted)* | GitHub PAT with read-only Contents access to inventory-finder |
 | `--admin-ssh-key PATH` | `~/.ssh/id_ed25519.pub` | Admin public key (pass `""` to skip) |
-| `--store-name NAME` | *(prompted, blank = none)* | Store display name - creates a public store page when the admin accepts the station |
+| `--store-name NAME` | *(saved or blank = none)* | Store display name - creates a public store page when the admin accepts the station. Saved between runs. |
 | `--skip-store-create` | *(off)* | Suppress public store page creation |
 | `--skip-test-print` | *(off)* | Skip printer test label on first provisioning run |
 | `--static-ip IP` | *(blank = DHCP)* | Optional static IP for the Pi |

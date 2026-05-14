@@ -243,3 +243,115 @@ class TestProvisionOnly:
             timeout=10,
         )
         assert result.returncode != 0
+
+    def _base_args(self, boot):
+        return [
+            "bash",
+            str(CREATE_SH),
+            "--boot-mount",
+            str(boot),
+            "--server-url",
+            "http://192.168.1.100:8000",
+            "--registration-secret",
+            "test-secret",
+            "--github-pat",
+            "ghp_testtoken123",
+            "--admin-ssh-key",
+            "",
+        ]
+
+    def test_store_name_written_to_station_conf(self, tmp_path):
+        boot = tmp_path / "bootfs"
+        boot.mkdir()
+        (boot / "cmdline.txt").write_text("root=/dev/mmcblk0p2\n")
+        subprocess.run(
+            self._base_args(boot) + ["--store-name", "Joe's Thrift Shop"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        conf_text = (boot / "station.conf").read_text()
+        assert 'STORE_NAME="Joe\'s Thrift Shop"' in conf_text
+
+    def test_skip_flags_written_to_station_conf(self, tmp_path):
+        boot = tmp_path / "bootfs"
+        boot.mkdir()
+        (boot / "cmdline.txt").write_text("root=/dev/mmcblk0p2\n")
+        subprocess.run(
+            self._base_args(boot) + ["--skip-store-create", "--skip-test-print"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        conf_text = (boot / "station.conf").read_text()
+        assert "SKIP_STORE_CREATE=true" in conf_text
+        assert "SKIP_TEST_PRINT=true" in conf_text
+
+    def test_defaults_saved_and_loaded(self, tmp_path):
+        """store name written on first run is reused on second run without --store-name."""
+        boot1 = tmp_path / "boot1"
+        boot1.mkdir()
+        (boot1 / "cmdline.txt").write_text("root=/dev/mmcblk0p2\n")
+        defaults_file = tmp_path / "defaults.json"
+
+        env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+        script = CREATE_SH.read_text()
+        patched = script.replace(
+            'DEFAULTS_FILE="$SCRIPT_DIR/.create-image.defaults.json"',
+            f'DEFAULTS_FILE="{defaults_file}"',
+        )
+        patched_script = tmp_path / "create-image-patched.sh"
+        patched_script.write_text(patched)
+        patched_script.chmod(0o755)
+
+        subprocess.run(
+            [
+                "bash",
+                str(patched_script),
+                "--boot-mount",
+                str(boot1),
+                "--server-url",
+                "http://192.168.1.100:8000",
+                "--registration-secret",
+                "test",
+                "--github-pat",
+                "ghp_testtoken123",
+                "--admin-ssh-key",
+                "",
+                "--store-name",
+                "Saved Store Name",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+        assert defaults_file.exists(), "defaults file was not created"
+
+        boot2 = tmp_path / "boot2"
+        boot2.mkdir()
+        (boot2 / "cmdline.txt").write_text("root=/dev/mmcblk0p2\n")
+        subprocess.run(
+            [
+                "bash",
+                str(patched_script),
+                "--boot-mount",
+                str(boot2),
+                "--server-url",
+                "http://192.168.1.100:8000",
+                "--registration-secret",
+                "test",
+                "--github-pat",
+                "ghp_testtoken123",
+                "--admin-ssh-key",
+                "",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+        conf_text = (boot2 / "station.conf").read_text()
+        assert 'STORE_NAME="Saved Store Name"' in conf_text, (
+            "store name from saved defaults was not written to station.conf on second run"
+        )
