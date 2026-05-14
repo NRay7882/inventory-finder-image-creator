@@ -885,14 +885,16 @@ exit 0
     $firstrun = $firstrunTemplate
     $firstrun = $firstrun.Replace('__HOSTNAME__',        $Hostname)
     $firstrun = $firstrun.Replace('__USERNAME__',        $Username)
-    $firstrun = $firstrun.Replace('__SSID__',            $WifiSsid)
-    $firstrun = $firstrun.Replace('__WIFIPW__',          $WifiPassword)
-    $firstrun = $firstrun.Replace('__COUNTRY__',         $WifiCountry)
     $firstrun = $firstrun.Replace('__KEYBOARD__',        $KeyboardLayout)
     $firstrun = $firstrun.Replace('__TIMEZONE__',        $Timezone)
     $firstrun = $firstrun.Replace('__LOCALE__',          $Locale)
-    $firstrun = $firstrun.Replace('__WIFI_HIDDEN_INT__', $wifiHiddenInt)
+    # __WIFI_BLOCK__ must be substituted before the individual WiFi tokens
+    # because __SSID__ etc. only exist inside $wifiBlock, not in the template itself.
     $firstrun = $firstrun.Replace('__WIFI_BLOCK__',      $wifiBlock)
+    $firstrun = $firstrun.Replace('__SSID__',            $WifiSsid)
+    $firstrun = $firstrun.Replace('__WIFIPW__',          $WifiPassword)
+    $firstrun = $firstrun.Replace('__COUNTRY__',         $WifiCountry)
+    $firstrun = $firstrun.Replace('__WIFI_HIDDEN_INT__', $wifiHiddenInt)
 
     # Write firstrun.sh - LF line endings, no BOM
     $firstrunPath = Join-Path $bootPath "firstrun.sh"

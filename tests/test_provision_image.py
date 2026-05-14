@@ -355,3 +355,57 @@ class TestProvisionOnly:
         assert 'STORE_NAME="Saved Store Name"' in conf_text, (
             "store name from saved defaults was not written to station.conf on second run"
         )
+
+
+@pytest.mark.bash
+class TestFirstrunWifiSubstitution:
+    """create-image.sh must substitute WiFi tokens in firstrun.sh.
+
+    Regression test for a bug where __SSID__, __WIFIPW__, and __COUNTRY__
+    were replaced before __WIFI_BLOCK__ was inserted, leaving the literal
+    placeholder strings in the generated firstrun.sh.
+    """
+
+    def _run_with_wifi(self, tmp_path, ssid, password):
+        boot = tmp_path / "bootfs"
+        boot.mkdir()
+        (boot / "cmdline.txt").write_text("console=serial0,115200 root=/dev/mmcblk0p2\n")
+        result = subprocess.run(
+            [
+                "bash",
+                str(CREATE_SH),
+                "--boot-mount",
+                str(boot),
+                "--server-url",
+                "http://192.168.1.100:8000",
+                "--registration-secret",
+                "test-secret",
+                "--github-pat",
+                "ghp_testtoken123",
+                "--admin-ssh-key",
+                "",
+                "--wifi-ssid",
+                ssid,
+                "--wifi-password",
+                password,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, f"create-image.sh failed:\n{result.stdout}\n{result.stderr}"
+        return (boot / "firstrun.sh").read_text()
+
+    def test_ssid_substituted_in_firstrun(self, tmp_path):
+        content = self._run_with_wifi(tmp_path, "MyNetwork", "MyPassword1")
+        assert "__SSID__" not in content, "Literal __SSID__ found - WiFi block not substituted"
+        assert "MyNetwork" in content
+
+    def test_wifi_password_substituted_in_firstrun(self, tmp_path):
+        content = self._run_with_wifi(tmp_path, "MyNetwork", "MyPassword1")
+        assert "__WIFIPW__" not in content, "Literal __WIFIPW__ found - WiFi block not substituted"
+        assert "MyPassword1" in content
+
+    def test_country_substituted_in_firstrun(self, tmp_path):
+        content = self._run_with_wifi(tmp_path, "MyNetwork", "MyPassword1")
+        assert "__COUNTRY__" not in content, "Literal __COUNTRY__ found - WiFi block not substituted"
