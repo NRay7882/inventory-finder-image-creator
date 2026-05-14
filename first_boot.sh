@@ -230,36 +230,30 @@ if [ -n "$WIFI_SSID" ]; then
         # Remove any stale connection with this name
         sudo nmcli connection delete "$wifi_conn_name" 2>/dev/null || true
 
-        # Write WiFi password to a temp file so nmcli doesn't reject it in
-        # non-interactive (systemd) mode. Trap ensures cleanup on any exit.
-        wifi_passwd_file=$(mktemp)
-        trap 'rm -f "$wifi_passwd_file"' EXIT INT TERM
-        printf 'wifi-sec.psk:%s\n' "$WIFI_PASSWORD" > "$wifi_passwd_file"
+        # Write the connection profile directly so the PSK is stored in the
+        # config file (psk-flags=0, system-owned). nmcli connection add stores
+        # secrets via the agent which doesn't exist in a systemd service context,
+        # causing "Secrets were required but not provided" on connection up.
+        nm_conn_dir="/etc/NetworkManager/system-connections"
+        nm_conn_file="${nm_conn_dir}/${wifi_conn_name}.nmconnection"
+        sudo mkdir -p "$nm_conn_dir"
 
         if [ -n "$STATIC_IP" ] && [ -n "$STATIC_GATEWAY" ]; then
-            # Create connection with static IP in one shot
-            sudo nmcli --passwd-file "$wifi_passwd_file" connection add \
-                type wifi ifname wlan0 con-name "$wifi_conn_name" \
-                ssid "$WIFI_SSID" \
-                wifi-sec.key-mgmt wpa-psk \
-                ipv4.method manual \
-                ipv4.addresses "${STATIC_IP}/${STATIC_PREFIX}" \
-                ipv4.gateway "$STATIC_GATEWAY" \
-                ipv4.dns "$STATIC_DNS" 2>&1 | tee -a "$LOG_FILE" || true
-            sudo nmcli connection up "$wifi_conn_name" 2>&1 | tee -a "$LOG_FILE" || true
-            ok "WiFi connection created with static IP"
+            printf '[connection]\nid=%s\ntype=wifi\nautoconnect=true\n\n[wifi]\nssid=%s\nmode=infrastructure\n\n[wifi-security]\nkey-mgmt=wpa-psk\npsk=%s\n\n[ipv4]\nmethod=manual\naddresses=%s/%s\ngateway=%s\ndns=%s\n' \
+                "$wifi_conn_name" "$WIFI_SSID" "$WIFI_PASSWORD" \
+                "$STATIC_IP" "$STATIC_PREFIX" "$STATIC_GATEWAY" "$STATIC_DNS" \
+                | sudo tee "$nm_conn_file" > /dev/null
+            ok "WiFi connection profile written with static IP"
         else
-            sudo nmcli --passwd-file "$wifi_passwd_file" connection add \
-                type wifi con-name "$wifi_conn_name" \
-                ifname wlan0 ssid "$WIFI_SSID" \
-                wifi-sec.key-mgmt wpa-psk \
-                ipv4.method auto 2>&1 | tee -a "$LOG_FILE" || true
-            sudo nmcli connection up "$wifi_conn_name" 2>&1 | tee -a "$LOG_FILE" || true
-            ok "WiFi connection created (DHCP)"
+            printf '[connection]\nid=%s\ntype=wifi\nautoconnect=true\n\n[wifi]\nssid=%s\nmode=infrastructure\n\n[wifi-security]\nkey-mgmt=wpa-psk\npsk=%s\n\n[ipv4]\nmethod=auto\n' \
+                "$wifi_conn_name" "$WIFI_SSID" "$WIFI_PASSWORD" \
+                | sudo tee "$nm_conn_file" > /dev/null
+            ok "WiFi connection profile written (DHCP)"
         fi
 
-        rm -f "$wifi_passwd_file"
-        trap - EXIT INT TERM
+        sudo chmod 600 "$nm_conn_file"
+        sudo nmcli connection reload 2>&1 | tee -a "$LOG_FILE" || true
+        sudo nmcli connection up "$wifi_conn_name" 2>&1 | tee -a "$LOG_FILE" || true
     fi
 
     # Wait for network connectivity (up to 60 seconds)
