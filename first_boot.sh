@@ -314,7 +314,12 @@ chmod 700 "${PI_HOME}/.ssh"
 CRED_FILE="${PI_HOME}/.git-credentials"
 printf 'https://x-access-token:%s@github.com\n' "$GITHUB_PAT" > "$CRED_FILE"
 chmod 600 "$CRED_FILE"
+# fix_owner handles root->PI_USER chown; explicit fallback ensures ownership
+# is correct even if fix_owner silently fails (e.g. on filesystem edge cases).
 fix_owner "$CRED_FILE"
+if [ "$(id -u)" = "0" ] && [ -n "$PI_USER" ] && [ "$PI_USER" != "root" ]; then
+    chown "${PI_USER}:${PI_USER}" "$CRED_FILE" 2>/dev/null || true
+fi
 
 # Prevent git from ever attempting interactive credential prompts.
 # Without this, a credential lookup failure hangs or errors with

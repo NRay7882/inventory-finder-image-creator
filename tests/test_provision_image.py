@@ -83,6 +83,31 @@ class TestFirstBootSh:
             "first_boot.sh comment still references client/scripts/ path from inventory-finder repo"
         )
 
+    def test_credentials_use_x_access_token_format(self):
+        """Credentials must use https://x-access-token:TOKEN@github.com format.
+
+        Writing just https://TOKEN@github.com puts the PAT in the username field;
+        git falls back to interactive prompting with no password, which fails with
+        'no such device or address' when running in a systemd service (no TTY).
+        """
+        content = FIRST_BOOT_SH.read_text()
+        assert "x-access-token:" in content, (
+            "first_boot.sh must use https://x-access-token:TOKEN@github.com format for git credentials"
+        )
+
+    def test_explicit_chown_after_fix_owner(self):
+        """first_boot.sh must explicitly chown the credentials file when running as root.
+
+        fix_owner() can silently fail on some filesystems; the explicit chown
+        is a belt-and-suspenders fallback to ensure update.sh (runs as PI_USER)
+        can always read the credentials file.
+        """
+        content = FIRST_BOOT_SH.read_text()
+        cred_section = content[content.find("CRED_FILE=") : content.find("git config --global credential.helper")]
+        assert 'chown "${PI_USER}:${PI_USER}" "$CRED_FILE"' in cred_section, (
+            "first_boot.sh must explicitly chown the credentials file after fix_owner"
+        )
+
 
 # ═════════════════════════════════════════════════════════════════════
 # create-image.sh
