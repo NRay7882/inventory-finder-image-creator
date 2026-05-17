@@ -159,6 +159,7 @@ while [[ $# -gt 0 ]]; do
         --store-name)          STORE_NAME="$2";    _explicit+=(StoreName);         shift 2 ;;
         --skip-store-create)   SKIP_STORE_CREATE="true"; _explicit+=(SkipStoreCreate); shift ;;
         --skip-test-print)     SKIP_TEST_PRINT="true"; _explicit+=(SkipTestPrint); shift   ;;
+        --reset-defaults)      RESET_DEFAULTS="true";                               shift   ;;
         --static-ip)           STATIC_IP="$2";     _explicit+=(StaticIp);          shift 2 ;;
         --static-gateway)      STATIC_GATEWAY="$2"; _explicit+=(StaticGateway);   shift 2 ;;
         --static-prefix)       STATIC_PREFIX="$2"; _explicit+=(StaticPrefix);      shift 2 ;;
@@ -172,10 +173,16 @@ OS_TYPE="$(uname -s)"  # Darwin or Linux
 FULL_MODE=false
 [[ -n "$IMAGE_PATH" ]] && FULL_MODE=true
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RESET_DEFAULTS="${RESET_DEFAULTS:-false}"
 
 # ── Saved defaults ────────────────────────────────────────────────────────────
 
 DEFAULTS_FILE="$SCRIPT_DIR/.create-image.defaults.json"
+
+if [[ "$RESET_DEFAULTS" == "true" && -f "$DEFAULTS_FILE" ]]; then
+    rm -f "$DEFAULTS_FILE"
+    ok "Saved defaults cleared (--reset-defaults)"
+fi
 
 _was_explicit() { local k="$1"; [[ " ${_explicit[*]} " == *" $k "* ]]; }
 
@@ -188,6 +195,10 @@ _load_saved() {
     printf '%s' "${val:-$fallback}"
 }
 
+# SkipTestPrint and SkipStoreCreate are intentionally not loaded from defaults:
+# they are one-time run flags (always false unless explicitly passed), not
+# persistent preferences. Omitting them always means false, never the last
+# cached value.
 if [[ -f "$DEFAULTS_FILE" ]] && command -v python3 &>/dev/null; then
     _was_explicit Hostname       || PI_HOSTNAME=$(_load_saved Hostname "$PI_HOSTNAME")
     _was_explicit Username       || PI_USERNAME=$(_load_saved Username "$PI_USERNAME")
@@ -201,8 +212,6 @@ if [[ -f "$DEFAULTS_FILE" ]] && command -v python3 &>/dev/null; then
     _was_explicit ServerUrl      || SERVER_URL=$(_load_saved ServerUrl "$SERVER_URL")
     _was_explicit AdminSshKeyPath || ADMIN_SSH_KEY_PATH=$(_load_saved AdminSshKeyPath "$ADMIN_SSH_KEY_PATH")
     _was_explicit StoreName      || STORE_NAME=$(_load_saved StoreName "$STORE_NAME")
-    _was_explicit SkipStoreCreate || SKIP_STORE_CREATE=$(_load_saved SkipStoreCreate "$SKIP_STORE_CREATE")
-    _was_explicit SkipTestPrint  || SKIP_TEST_PRINT=$(_load_saved SkipTestPrint "$SKIP_TEST_PRINT")
     _was_explicit StaticIp       || STATIC_IP=$(_load_saved StaticIp "$STATIC_IP")
     _was_explicit StaticGateway  || STATIC_GATEWAY=$(_load_saved StaticGateway "$STATIC_GATEWAY")
     _was_explicit StaticPrefix   || STATIC_PREFIX=$(_load_saved StaticPrefix "$STATIC_PREFIX")
@@ -815,7 +824,6 @@ if command -v python3 &>/dev/null; then
            _D_WIFI_COUNTRY="$WIFI_COUNTRY" _D_WIFI_SECURITY="$WIFI_SECURITY" \
            _D_WIFI_HIDDEN="$WIFI_HIDDEN" _D_SERVER_URL="$SERVER_URL" \
            _D_ADMIN_SSH_KEY_PATH="$ADMIN_SSH_KEY_PATH" _D_STORE_NAME="$STORE_NAME" \
-           _D_SKIP_STORE_CREATE="$SKIP_STORE_CREATE" _D_SKIP_TEST_PRINT="$SKIP_TEST_PRINT" \
            _D_STATIC_IP="$STATIC_IP" _D_STATIC_GATEWAY="$STATIC_GATEWAY" \
            _D_STATIC_PREFIX="$STATIC_PREFIX" _D_STATIC_DNS="$STATIC_DNS" \
            _D_FILE="$DEFAULTS_FILE"
@@ -834,8 +842,6 @@ mapping = {
     "ServerUrl":       "_D_SERVER_URL",
     "AdminSshKeyPath": "_D_ADMIN_SSH_KEY_PATH",
     "StoreName":       "_D_STORE_NAME",
-    "SkipStoreCreate": "_D_SKIP_STORE_CREATE",
-    "SkipTestPrint":   "_D_SKIP_TEST_PRINT",
     "StaticIp":        "_D_STATIC_IP",
     "StaticGateway":   "_D_STATIC_GATEWAY",
     "StaticPrefix":    "_D_STATIC_PREFIX",
@@ -849,6 +855,8 @@ except Exception:
     existing = {}
 for k, env_k in mapping.items():
     existing[k] = os.environ.get(env_k, "")
+for stale in ["SkipStoreCreate", "SkipTestPrint"]:
+    existing.pop(stale, None)
 with open(dest, "w") as f:
     json.dump(existing, f, indent=2)
 PYEOF

@@ -89,8 +89,12 @@
     Set to $true to suppress public store page creation. Default: $false.
 
 .PARAMETER SkipTestPrint
-    Set to $true to skip the printer test label during first provisioning. Default: $false.
-    Useful when the label printer is not yet connected or you want to verify setup before printing.
+    Skip the printer test label during first provisioning. Default: $false.
+    This flag is never cached - omitting it always means false regardless of previous runs.
+
+.PARAMETER ResetDefaults
+    Wipe the saved defaults file (.create-image.defaults.json) before this run.
+    All prompts revert to their built-in defaults as if run for the first time.
 
 .PARAMETER StaticIp, StaticGateway, StaticPrefix, StaticDns
     Optional static IP. Leave blank for DHCP.
@@ -137,7 +141,10 @@ param(
     [string]$StaticIp,
     [string]$StaticGateway,
     [string]$StaticPrefix = "24",
-    [string]$StaticDns    = "8.8.8.8,1.1.1.1"
+    [string]$StaticDns    = "8.8.8.8,1.1.1.1",
+
+    # Wipe all saved defaults and start fresh (does not affect this run's values)
+    [switch]$ResetDefaults
 )
 
 # Capture which params were explicitly supplied before any defaults are applied
@@ -423,18 +430,22 @@ function Read-DefaultSecure {
 
 # ── Load saved defaults ───────────────────────────────────────────────────────
 
-$_cfg = Import-Conf
+$_cfg = if ($ResetDefaults) { @{} } else { Import-Conf }
+if ($ResetDefaults) { Ok "Saved defaults cleared (-ResetDefaults)" }
 
-# Apply saved non-sensitive values for any param that was not explicitly provided
+# Apply saved non-sensitive values for any param that was not explicitly provided.
+# SkipTestPrint and SkipStoreCreate are intentionally excluded: they are one-time
+# run flags (default false), not persistent preferences. Omitting them on the
+# command line always means false, never the last cached value.
 foreach ($k in @('ImagePath','Hostname','Username','Timezone','KeyboardLayout',
                   'WifiSsid','WifiCountry','WifiSecurity','WifiHidden','Locale',
-                  'ServerUrl','AdminSshKeyPath','StoreName','SkipStoreCreate','SkipTestPrint',
+                  'ServerUrl','AdminSshKeyPath','StoreName',
                   'StaticIp','StaticGateway','StaticPrefix','StaticDns')) {
     if (-not $_explicitParams.Contains($k)) {
         $saved = if ($_cfg.ContainsKey($k)) { $_cfg[$k] } else { $null }
         if ($saved -ne $null -and $saved -ne '') {
-            if ($k -in @('WifiHidden','SkipStoreCreate','SkipTestPrint')) { Set-Variable -Name $k -Value ([bool]$saved) -Scope Script }
-            else                     { Set-Variable -Name $k -Value ([string]$saved) -Scope Script }
+            if ($k -in @('WifiHidden')) { Set-Variable -Name $k -Value ([bool]$saved) -Scope Script }
+            else                        { Set-Variable -Name $k -Value ([string]$saved) -Scope Script }
         }
     }
 }
@@ -1087,8 +1098,6 @@ $newCfg = [ordered]@{
     ServerUrl             = $ServerUrl
     AdminSshKeyPath       = $AdminSshKeyPath
     StoreName             = $StoreName
-    SkipStoreCreate       = [bool]$SkipStoreCreate
-    SkipTestPrint         = [bool]$SkipTestPrint
     StaticIp              = $StaticIp
     StaticGateway         = $StaticGateway
     StaticPrefix          = $StaticPrefix
